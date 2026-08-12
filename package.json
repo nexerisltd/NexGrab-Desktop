@@ -1,0 +1,45 @@
+{
+  "name": "nexgrab",
+  "productName": "NexGrab",
+  "version": "0.0.1",
+  "description": "NexGrab — a beautifully simple, ridiculously capable YouTube video & audio downloader powered by yt-dlp.",
+  "author": "NexApp",
+  "main": "main.js",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.nexapp.nexgrab",
+    "productName": "NexGrab",
+    "icon": "assets/icon.png",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "assets/icon.*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico",
+      "extraResources": [{ "from": "assets/bin/win", "to": "bin" }]
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.utilities",
+      "extraResources": [{ "from": "assets/bin/mac", "to": "bin" }]
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon.png",
+      "extraResources": [{ "from": "assets/bin/linux", "to": "bin" }]
+    }
+  }
+}
