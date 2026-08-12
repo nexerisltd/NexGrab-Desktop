@@ -2,7 +2,7 @@
 
 > A clean, capable desktop downloader for YouTube video and audio, built with Electron and yt-dlp.
 
-![NexGrab cover]([assets/Cover.png](https://github.com/nexerisltd/NexGrab-Desktop/blob/main/assets/cover.png))
+![NexGrab cover]([assets/Cover.png](https://github.com/nexerisltd/NexGrab-Desktop/blob/main/assets/cover.png)
 
 NexGrab makes it simple to download videos, extract audio, manage playlists, save subtitles, and keep a history of your downloads from one focused desktop app.
 
