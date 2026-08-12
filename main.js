@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Notification, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Notification, Menu, session, Tray, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, execFile } = require('child_process');
@@ -44,8 +44,11 @@ const DEFAULT_SETTINGS = {
   embedMetadata: true,
   clipboardWatch: true,
   sponsorBlock: false,
+  minimizeToTray: true,
+  closeToTray: true,
   rateLimit: '', // e.g. "5M" for 5MB/s, empty = unlimited
-  cookiesFromBrowser: '' // e.g. "chrome", "edge", "firefox" — fixes "Sign in to confirm you're not a bot"
+  cookiesFromBrowser: '', // e.g. "chrome", "edge", "firefox" — fixes "Sign in to confirm you're not a bot"
+  cookiesFilePath: '' // path to an exported cookies.txt — more reliable than cookiesFromBrowser on newer Chrome
 };
 
 function readJSON(file, fallback) {
@@ -66,6 +69,10 @@ let history = readJSON(HISTORY_FILE, []);
 // Window
 // ---------------------------------------------------------------------------
 let mainWindow;
+let tray = null;
+let isQuitting = false;
+
+const ICON_PATH = path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -74,7 +81,7 @@ function createWindow() {
     minWidth: 920,
     minHeight: 640,
     backgroundColor: '#0b0c0f',
-    icon: path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
+    icon: ICON_PATH,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -87,6 +94,48 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'));
 
   if (process.env.NEXGRAB_DEBUG) mainWindow.webContents.openDevTools();
+
+  // Minimize to tray
+  mainWindow.on('minimize', (e) => {
+    if (settings.minimizeToTray) {
+      e.preventDefault();
+      mainWindow.hide();
+    }
+  });
+
+  // Close to tray (unless user chose Quit from the tray menu, or the OS is
+  // actually shutting the app down)
+  mainWindow.on('close', (e) => {
+    if (settings.closeToTray && !isQuitting) {
+      e.preventDefault();
+      mainWindow.hide();
+      return false;
+    }
+  });
+}
+
+function createTray() {
+  if (tray) return;
+  const img = nativeImage.createFromPath(ICON_PATH);
+  tray = new Tray(img.isEmpty() ? img : img.resize({ width: 16, height: 16 }));
+  tray.setToolTip('NexGrab');
+
+  const menu = Menu.buildFromTemplate([
+    { label: 'Open NexGrab', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
+    { type: 'separator' },
+    {
+      label: 'Quit', click: () => {
+        isQuitting = true;
+        app.quit();
+      }
+    }
+  ]);
+  tray.setContextMenu(menu);
+  tray.on('click', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isVisible()) mainWindow.focus();
+    else mainWindow.show();
+  });
 }
 
 if (process.platform === 'win32') {
@@ -95,14 +144,21 @@ if (process.platform === 'win32') {
 
 app.whenReady().then(() => {
   createWindow();
+  createTray();
   startClipboardWatcher();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    else mainWindow?.show();
   });
 });
 
+app.on('before-quit', () => { isQuitting = true; });
+
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  // With close-to-tray enabled the window is hidden rather than destroyed,
+  // so this normally only fires on a real quit or on platforms/settings
+  // where close-to-tray is off.
+  if (process.platform !== 'darwin' && !settings.closeToTray) app.quit();
 });
 
 // ---------------------------------------------------------------------------
@@ -126,9 +182,12 @@ function startClipboardWatcher() {
 // Helpers to run yt-dlp
 // ---------------------------------------------------------------------------
 function runYtDlpJSON(args) {
-  const finalArgs = settings.cookiesFromBrowser
-    ? ['--cookies-from-browser', settings.cookiesFromBrowser, ...args]
-    : args;
+  const cookieArgs = settings.cookiesFilePath
+    ? ['--cookies', settings.cookiesFilePath]
+    : settings.cookiesFromBrowser
+      ? ['--cookies-from-browser', settings.cookiesFromBrowser]
+      : [];
+  const finalArgs = [...cookieArgs, ...args];
   return new Promise((resolve, reject) => {
     execFile(settings.ytdlpPath, finalArgs, { maxBuffer: 1024 * 1024 * 64 }, (err, stdout, stderr) => {
       if (err) return reject(new Error(stderr || err.message));
@@ -210,6 +269,17 @@ ipcMain.handle('dialog:choose-folder-once', async () => {
   return res.filePaths[0];
 });
 
+ipcMain.handle('dialog:choose-cookies-file', async () => {
+  const res = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: 'Cookies file', extensions: ['txt'] }]
+  });
+  if (res.canceled || !res.filePaths.length) return null;
+  settings.cookiesFilePath = res.filePaths[0];
+  writeJSON(SETTINGS_FILE, settings);
+  return settings.cookiesFilePath;
+});
+
 ipcMain.handle('settings:get', () => settings);
 ipcMain.handle('settings:set', (_evt, partial) => {
   settings = { ...settings, ...partial };
@@ -223,11 +293,25 @@ ipcMain.handle('history:clear', () => {
   writeJSON(HISTORY_FILE, history);
   return history;
 });
-ipcMain.handle('shell:open-folder', (_evt, filePath) => {
+ipcMain.handle('shell:open-folder', (_evt, rawPath) => {
+  const filePath = rawPath ? path.normalize(rawPath.trim()) : '';
+
   if (filePath && fs.existsSync(filePath)) {
-    shell.showItemInFolder(filePath);
+    if (process.platform === 'win32') {
+      // shell.showItemInFolder() silently fails to select the file (just
+      // focuses an already-open Explorer window) on some Windows builds.
+      // Calling explorer.exe directly with /select is far more reliable.
+      try {
+        spawn('explorer.exe', [`/select,${filePath}`]);
+      } catch {
+        shell.showItemInFolder(filePath);
+      }
+    } else {
+      shell.showItemInFolder(filePath);
+    }
     return { ok: true };
   }
+
   const dir = filePath ? path.dirname(filePath) : null;
   if (dir && fs.existsSync(dir)) {
     shell.openPath(dir);
@@ -240,9 +324,138 @@ ipcMain.handle('shell:open-path', (_evt, filePath) => {
 });
 
 // ---------------------------------------------------------------------------
+// "Sign in to YouTube" — an embedded Electron login window instead of asking
+// the user to fiddle with browser extensions or cookies.txt files. Electron
+// owns this window's cookie jar directly, so there's no "Chrome database is
+// locked/encrypted" problem — we read the cookies straight from our own
+// session once login completes.
+// ---------------------------------------------------------------------------
+const DESKTOP_CHROME_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+function cookiesToNetscape(cookies) {
+  const lines = ['# Netscape HTTP Cookie File', '# Generated by NexGrab — do not edit', ''];
+  cookies.forEach((c) => {
+    const domain = c.domain.startsWith('.') ? c.domain : `.${c.domain}`;
+    const includeSub = domain.startsWith('.') ? 'TRUE' : 'FALSE';
+    const path = c.path || '/';
+    const secure = c.secure ? 'TRUE' : 'FALSE';
+    const expiry = c.expirationDate ? Math.floor(c.expirationDate) : 0;
+    lines.push([domain, includeSub, path, secure, expiry, c.name, c.value].join('\t'));
+  });
+  return lines.join('\n');
+}
+
+let loginWindow = null;
+
+ipcMain.handle('auth:youtube-signin', async () => {
+  if (loginWindow) { loginWindow.focus(); return { started: true }; }
+
+  const loginSession = session.fromPartition('persist:nexgrab-ytlogin');
+  loginSession.setUserAgent(DESKTOP_CHROME_UA);
+
+  loginWindow = new BrowserWindow({
+    width: 480,
+    height: 680,
+    parent: mainWindow,
+    modal: false,
+    title: 'Sign in to YouTube',
+    webPreferences: { session: loginSession, contextIsolation: true, nodeIntegration: false }
+  });
+  loginWindow.setMenuBarVisibility(false);
+
+  // Google's login flow frequently opens a *second* window for account
+  // picker / "Verify it's you" / 2-step verification steps. Electron blocks
+  // window.open() by default, so that popup silently disappears — Google
+  // then sees an incomplete flow and shows "This browser or app may not be
+  // secure." Explicitly allowing child windows (in the same session, so
+  // cookies stay unified) fixes the sign-in failure in most cases.
+  loginWindow.webContents.setWindowOpenHandler(() => ({
+    action: 'allow',
+    overrideBrowserWindowOptions: {
+      parent: loginWindow,
+      width: 480,
+      height: 680,
+      webPreferences: { session: loginSession, contextIsolation: true, nodeIntegration: false }
+    }
+  }));
+
+  loginWindow.webContents.on('did-create-window', (childWindow) => {
+    childWindow.setMenuBarVisibility(false);
+  });
+
+  loginWindow.loadURL('https://accounts.google.com/ServiceLogin?service=youtube&continue=https://www.youtube.com/');
+
+  const send = (payload) => mainWindow?.webContents.send('auth:status', payload);
+  send({ status: 'opened' });
+
+  let finished = false;
+  const finish = async (status, message) => {
+    if (finished) return;
+    finished = true;
+    clearInterval(pollTimer);
+    if (loginWindow && !loginWindow.isDestroyed()) loginWindow.close();
+    loginWindow = null;
+    send({ status, message });
+  };
+
+  // Poll for a strong "logged in" signal cookie rather than trying to parse
+  // Google's ever-changing login page DOM.
+  const pollTimer = setInterval(async () => {
+    try {
+      const cookies = await loginSession.cookies.get({ domain: '.youtube.com' });
+      const loggedIn = cookies.some((c) => c.name === 'LOGIN_INFO' || c.name === 'SAPISID');
+      if (loggedIn) {
+        // Give the rest of the session cookies a moment to settle.
+        await new Promise((r) => setTimeout(r, 1200));
+        const allCookies = await loginSession.cookies.get({ url: 'https://www.youtube.com' });
+        const cookiesTxt = cookiesToNetscape(allCookies);
+        const outPath = path.join(USER_DATA, 'youtube-cookies.txt');
+        fs.writeFileSync(outPath, cookiesTxt);
+
+        settings.cookiesFilePath = outPath;
+        settings.cookiesFromBrowser = '';
+        writeJSON(SETTINGS_FILE, settings);
+
+        await finish('success', 'Signed in to YouTube');
+      }
+    } catch (e) {
+      // Session might be mid-navigation; ignore and try again next tick.
+    }
+  }, 1500);
+
+  loginWindow.on('closed', () => {
+    loginWindow = null;
+    if (!finished) { finished = true; clearInterval(pollTimer); send({ status: 'cancelled' }); }
+  });
+
+  return { started: true };
+});
+
+ipcMain.handle('auth:youtube-signout', () => {
+  settings.cookiesFilePath = '';
+  settings.cookiesFromBrowser = '';
+  writeJSON(SETTINGS_FILE, settings);
+  const cookiesFile = path.join(USER_DATA, 'youtube-cookies.txt');
+  try { if (fs.existsSync(cookiesFile)) fs.unlinkSync(cookiesFile); } catch {}
+  return settings;
+});
+
+// ---------------------------------------------------------------------------
 // Download engine — one child process per queued job, tracked by jobId
 // ---------------------------------------------------------------------------
 const activeJobs = new Map(); // jobId -> ChildProcess
+
+// Accepts "90", "1:30", "01:30", "1:02:03" etc. Returns a yt-dlp-friendly
+// timecode string, or null if the input isn't a recognizable time.
+function normalizeTimecode(raw) {
+  if (!raw) return null;
+  const v = String(raw).trim();
+  if (!v) return null;
+  if (/^\d+(\.\d+)?$/.test(v)) return v; // plain seconds
+  if (/^\d{1,2}(:\d{1,2}){1,2}$/.test(v)) return v; // mm:ss or hh:mm:ss
+  return null;
+}
 
 function buildArgs(job) {
   const { url, mode, height, audioFormat, audioQuality, container, subtitles, subLangs,
@@ -250,7 +463,8 @@ function buildArgs(job) {
 
   const args = ['--newline', '--no-warnings', '--ignore-config'];
 
-  if (settings.cookiesFromBrowser) args.push('--cookies-from-browser', settings.cookiesFromBrowser);
+  if (settings.cookiesFilePath) args.push('--cookies', settings.cookiesFilePath);
+  else if (settings.cookiesFromBrowser) args.push('--cookies-from-browser', settings.cookiesFromBrowser);
   if (rateLimit) args.push('--limit-rate', rateLimit);
 
   if (mode === 'audio') {
@@ -270,7 +484,14 @@ function buildArgs(job) {
   }
 
   if (trimStart || trimEnd) {
-    args.push('--download-sections', `*${trimStart || '0'}-${trimEnd || 'inf'}`);
+    const start = normalizeTimecode(trimStart) || '0';
+    const end = normalizeTimecode(trimEnd) || 'inf';
+    args.push('--download-sections', `*${start}-${end}`);
+    // Without this, yt-dlp cuts on the nearest keyframe *before* the
+    // requested time instead of the exact timestamp — clips end up
+    // starting early / running long. This re-encodes the cut points so the
+    // trim is actually accurate (slightly slower, but correct).
+    args.push('--force-keyframes-at-cuts');
   }
 
   if (sponsorBlock && mode !== 'audio') {

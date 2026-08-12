@@ -1,7 +1,7 @@
 {
   "name": "nexgrab",
   "productName": "NexGrab",
-  "version": "1.0.1",
+  "version": "2.0.1",
   "description": "NexGrab — a beautifully simple, ridiculously capable YouTube video & audio downloader powered by yt-dlp.",
   "author": "NexApp",
   "main": "main.js",
@@ -19,6 +19,8 @@
     "appId": "com.nexapp.nexgrab",
     "productName": "NexGrab",
     "forceCodeSigning": false,
+    "asar": true,
+    "compression": "maximum",
     "icon": "assets/icon.png",
     "files": [
       "main.js",
@@ -45,7 +47,9 @@
       "createStartMenuShortcut": true,
       "shortcutName": "NexGrab",
       "installerIcon": "assets/icon.ico",
-      "uninstallerIcon": "assets/icon.ico"
+      "uninstallerIcon": "assets/icon.ico",
+      "installerSidebar": "assets/installer-sidebar.bmp",
+      "uninstallerSidebar": "assets/installer-sidebar.bmp"
     },
     "mac": {
       "target": "dmg",
@@ -68,8 +72,5 @@
         }
       ]
     }
-  },
-  "allowScripts": {
-    "electron@31.7.7": true
   }
 }

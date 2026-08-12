@@ -8,6 +8,10 @@ contextBridge.exposeInMainWorld('nex', {
   chooseFolderOnce: () => ipcRenderer.invoke('dialog:choose-folder-once'),
   chooseCookiesFile: () => ipcRenderer.invoke('dialog:choose-cookies-file'),
 
+  startYoutubeSignIn: () => ipcRenderer.invoke('auth:youtube-signin'),
+  youtubeSignOut: () => ipcRenderer.invoke('auth:youtube-signout'),
+  onAuthStatus: (cb) => ipcRenderer.on('auth:status', (_e, data) => cb(data)),
+
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (partial) => ipcRenderer.invoke('settings:set', partial),
 

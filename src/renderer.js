@@ -13,6 +13,8 @@
   let subtitlesOn = false;
   let sponsorBlockOn = false;
   let selectedPlaylistIds = new Set();
+  let trimStartVal = '';
+  let trimEndVal = '';
 
   const pendingQueue = [];
   let activeCount = 0;
@@ -82,6 +84,7 @@
     $('#output-dir').value = settings.outputDir;
     $('#cookies-browser').value = settings.cookiesFromBrowser || '';
     $('#cookies-file').value = settings.cookiesFilePath || '';
+    updateSignInStatus();
     $('#concurrency').value = settings.concurrency;
     $('#concurrency-val').textContent = settings.concurrency;
     $('#rate-limit').value = settings.rateLimit || '';
@@ -90,6 +93,8 @@
     $('#toggle-clipboard').checked = settings.clipboardWatch;
     $('#toggle-sponsorblock').checked = settings.sponsorBlock;
     sponsorBlockOn = settings.sponsorBlock;
+    $('#toggle-minimize-tray').checked = settings.minimizeToTray !== false;
+    $('#toggle-close-tray').checked = settings.closeToTray !== false;
   }
 
   async function checkYtDlp() {
@@ -128,9 +133,60 @@
   $('#cookies-browser').addEventListener('change', async (e) => {
     settings = await window.nex.setSettings({ cookiesFromBrowser: e.target.value });
   });
+
   $('#choose-cookies-file-btn').addEventListener('click', async () => {
-  const filePath = await window.nex.chooseCookiesFile();
-  if (filePath) { $('#cookies-file').value = filePath; settings.cookiesFilePath = filePath; }
+    const filePath = await window.nex.chooseCookiesFile();
+    if (filePath) {
+      $('#cookies-file').value = filePath;
+      settings.cookiesFilePath = filePath;
+      updateSignInStatus();
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // "Sign in to YouTube" — embedded login window, no browser/cookies fiddling
+  // ---------------------------------------------------------------------
+  function updateSignInStatus() {
+    const el = $('#youtube-signin-status');
+    const btn = $('#youtube-signin-btn');
+    if (settings.cookiesFilePath) {
+      el.textContent = '✓ Signed in';
+      el.className = 'hint-line ok';
+      btn.textContent = 'Sign in again';
+    } else {
+      el.textContent = 'Not signed in — needed if downloads fail with "not a bot" errors.';
+      el.className = 'hint-line';
+      btn.textContent = 'Sign in to YouTube';
+    }
+  }
+
+  $('#youtube-signin-btn').addEventListener('click', async () => {
+    $('#youtube-signin-btn').disabled = true;
+    $('#youtube-signin-status').textContent = 'Opening sign-in window…';
+    $('#youtube-signin-status').className = 'hint-line';
+    await window.nex.startYoutubeSignIn();
+  });
+
+  window.nex.onAuthStatus(async (data) => {
+    const statusEl = $('#youtube-signin-status');
+    const btn = $('#youtube-signin-btn');
+    btn.disabled = false;
+
+    if (data.status === 'opened') {
+      statusEl.textContent = 'Log in with your Google account in the window that opened…';
+    } else if (data.status === 'success') {
+      settings = await window.nex.getSettings();
+      $('#cookies-file').value = settings.cookiesFilePath || '';
+      $('#cookies-browser').value = '';
+      updateSignInStatus();
+      toast('Signed in to YouTube', 'success');
+    } else if (data.status === 'cancelled') {
+      statusEl.textContent = 'Sign-in window closed — not signed in.';
+      statusEl.className = 'hint-line';
+    } else if (data.status === 'error') {
+      statusEl.textContent = `Sign-in failed: ${data.message || 'unknown error'}. If Google keeps blocking the popup, use "Cookies from browser" below instead — sign in to YouTube in Chrome/Edge/Firefox normally, then pick that browser here.`;
+      statusEl.className = 'hint-line err';
+    }
   });
 
   $('#concurrency').addEventListener('input', (e) => { $('#concurrency-val').textContent = e.target.value; });
@@ -144,7 +200,8 @@
   });
 
   [['toggle-thumbnail', 'embedThumbnail'], ['toggle-metadata', 'embedMetadata'],
-   ['toggle-clipboard', 'clipboardWatch']].forEach(([id, key]) => {
+   ['toggle-clipboard', 'clipboardWatch'], ['toggle-minimize-tray', 'minimizeToTray'],
+   ['toggle-close-tray', 'closeToTray']].forEach(([id, key]) => {
     $(`#${id}`).addEventListener('change', async (e) => {
       settings = await window.nex.setSettings({ [key]: e.target.checked });
     });
@@ -246,6 +303,8 @@
     currentMode = 'video';
     selectedHeight = info.availableHeights[0] || 'best';
     subtitlesOn = false;
+    trimStartVal = '';
+    trimEndVal = '';
 
     const preview = $('#preview');
     preview.hidden = false;
@@ -344,19 +403,21 @@
       </div>
       <div class="trim-row">
         <span>Clip:</span>
-        <input type="text" id="opt-trim-start" placeholder="00:00"/>
+        <input type="text" id="opt-trim-start" placeholder="00:00" value="${escapeHtml(trimStartVal)}"/>
         <span>to</span>
-        <input type="text" id="opt-trim-end" placeholder="end"/>
+        <input type="text" id="opt-trim-end" placeholder="end" value="${escapeHtml(trimEndVal)}"/>
         <span>(optional — leave blank for full video)</span>
       </div>
     `;
     $('#opt-subs').addEventListener('change', (e) => { subtitlesOn = e.target.checked; });
     $('#opt-sponsorblock').addEventListener('change', (e) => { sponsorBlockOn = e.target.checked; });
+    $('#opt-trim-start').addEventListener('input', (e) => { trimStartVal = e.target.value.trim(); });
+    $('#opt-trim-end').addEventListener('input', (e) => { trimEndVal = e.target.value.trim(); });
   }
 
   function enqueueSingle(info, forcedOutputDir) {
-    const trimStart = $('#opt-trim-start')?.value.trim() || '';
-    const trimEnd = $('#opt-trim-end')?.value.trim() || '';
+    const trimStart = trimStartVal;
+    const trimEnd = trimEndVal;
 
     const job = {
       jobId: uid(),
@@ -389,6 +450,8 @@
   function renderPlaylistPreview(info) {
     currentMode = 'video';
     subtitlesOn = false;
+    trimStartVal = '';
+    trimEndVal = '';
     const preview = $('#preview');
     preview.hidden = false;
     info.entries.forEach((e) => selectedPlaylistIds.add(e.id));
@@ -460,7 +523,7 @@
     $('#add-playlist-btn').addEventListener('click', () => {
       const chosen = info.entries.filter((e) => selectedPlaylistIds.has(e.id));
       if (!chosen.length) { toast('Select at least one video'); return; }
-      const trimStart = '', trimEnd = '';
+      const trimStart = trimStartVal, trimEnd = trimEndVal;
       chosen.forEach((e) => {
         const job = {
           jobId: uid(),
