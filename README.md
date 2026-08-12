@@ -1,58 +1,39 @@
 # NexGrab
 
-**A beautifully simple, seriously capable YouTube downloader.**
-Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp) · Desktop app (Electron) · Minimalist UI
+A beautifully simple, seriously capable desktop downloader for YouTube videos and audio, built with Electron and yt-dlp.
 
-- **Name:** NexGrab
-- **Author:** NexApp
-- **Version:** 0.0.1
+![NexGrab cover](assets/Cover.png)
 
----
+NexGrab brings a clean, modern desktop experience to downloading content from YouTube with support for video, audio, playlists, subtitles, trimming, and more.
 
-## ✨ Features
+## ✨ Highlights
 
-- 🎬 **Video downloads up to 4K/8K** — pick from every resolution yt-dlp can see for that video
-- 🎧 **Audio-only extraction** — MP3, M4A, Opus, FLAC (lossless), WAV, with selectable bitrate
-- 📃 **Full playlist support** — fetch an entire playlist, tick the videos you actually want, download in bulk
-- 🧵 **Batch queue** with configurable **concurrent downloads** (1–5 at once)
-- 📊 **Live progress** — percentage, speed, ETA, and merge status per item, right in the queue
-- ⏱️ **Clip / trim downloads** — grab just a section of a video (start–end timestamps)
-- 📝 **Subtitle downloads** — auto-detected languages, embedded straight into the video file
-- 🚀 **SponsorBlock integration** — automatically cut sponsor segments out of downloaded videos
-- 🖼️ **Thumbnail + metadata embedding** — downloaded files carry cover art, title, and artist tags
-- 📋 **Clipboard watcher** — copy a YouTube link anywhere and NexGrab notices it automatically
-- 🕘 **Download history** — searchable, with one click to reveal a file in its folder
-- 🐌 **Speed limiter** — cap bandwidth usage so downloads don't hog your connection
-- 🌗 **Dark & light themes**, minimalist glass UI, zero clutter
-- 📁 **Custom save location**, remembered between sessions
-- 🔔 **Native notifications** when a download finishes
+- 🎬 Download videos up to 4K/8K or extract audio in MP3, M4A, Opus, FLAC, WAV
+- 📃 Support for full playlists and bulk queue management
+- ✂️ Clip downloads by start and end timestamps
+- 📝 Subtitle downloads and SponsorBlock support
+- 🕘 Download history, clipboard watching, speed limiting, and theme switching
+- 📁 Custom save location with persistent settings
 
----
+## 📸 Screenshots
 
-## 🧩 For end users
+### Home view
 
-Nothing to install. Download the NexGrab installer for your OS, run it, done —
-yt-dlp and ffmpeg are bundled inside the app.
+![NexGrab home in dark mode](assets/Home_Dark.png)
 
-## 🧩 For developers building NexGrab
+![NexGrab home in light mode](assets/Home_Light.png)
 
-1. **Node.js** ≥ 18 — https://nodejs.org
-2. Drop platform binaries into `assets/bin/win`, `assets/bin/mac`, `assets/bin/linux`
-   — see `assets/bin/README.md` for exact download links. These get bundled
-   into the installer automatically by `npm run dist`.
-3. Drop your logo into `assets/` as `icon.png`, `icon.ico`, `icon.icns`
-   — see `assets/ICON_README.md`.
+### Settings
 
-While developing (`npm start`) without the bundled binaries in place, NexGrab
-falls back to whatever `yt-dlp` / `ffmpeg` it finds on your system PATH, so
-you can still test locally without downloading the binaries yet.
+![NexGrab settings screen](assets/Settings_slide.png)
 
----
+### History
 
-## 🚀 Run it
+![NexGrab history screen](assets/History_Slide.png)
+
+## 🚀 Run locally
 
 ```bash
-cd NexGrab
 npm install
 npm start
 ```
@@ -63,29 +44,15 @@ npm start
 npm run dist
 ```
 
-This uses `electron-builder` to produce a Windows installer, macOS `.dmg`, or Linux `AppImage` depending on the platform you build on.
+This uses electron-builder to generate installers for Windows, macOS, and Linux depending on the platform you build on.
 
----
+## 🧩 Development notes
 
-## 🗂️ Project structure
-
-```
-NexGrab/
-├── main.js        # Electron main process — spawns yt-dlp, manages downloads, settings, history
-├── preload.js     # Secure IPC bridge exposed to the UI as window.nex
-├── src/
-│   ├── index.html # App shell
-│   ├── style.css  # Design system (dark/light tokens, components)
-│   └── renderer.js# All UI behaviour — fetch info, queue, drawers, progress
-└── package.json
-```
-
-The backend is intentionally thin: it just prepares the right `yt-dlp` command-line flags for each job, streams progress back over IPC, and keeps a small JSON history/settings file in the app's user-data folder. All the polish lives in the frontend.
-
----
+- Node.js 18 or newer is recommended
+- Bundled binaries for yt-dlp and ffmpeg are expected under the assets/bin folders
+- The app can fall back to system-installed yt-dlp/ffmpeg during local development if the bundled binaries are not present yet
 
 ## 🔒 Notes
 
-- NexGrab only talks to `yt-dlp` on your own machine — no accounts, no tracking, no ads.
-- Respect YouTube's Terms of Service and copyright law in your region when downloading content.
-"# NexGrab-Desktop" 
+- NexGrab uses yt-dlp on your machine and does not require accounts or tracking
+- Please respect YouTube's Terms of Service and local copyright laws when downloading content

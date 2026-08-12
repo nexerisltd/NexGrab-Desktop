@@ -356,8 +356,6 @@ input { font-family: var(--font-body); }
 .trim-row span { color: var(--text-faint); font-size: 12px; }
 
 .add-queue-btn { width: 100%; justify-content: center; }
-.btn-row { display: flex; gap: 10px; margin-top: 4px; }
-.btn-row .primary-btn, .btn-row .ghost-btn { flex: 1; justify-content: center; }
 
 /* Playlist list */
 .playlist-list { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin: 10px 0 16px; }

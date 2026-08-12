@@ -91,6 +91,10 @@ function createWindow() {
   if (process.env.NEXGRAB_DEBUG) mainWindow.webContents.openDevTools();
 }
 
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.nexapp.nexgrab');
+}
+
 app.whenReady().then(() => {
   createWindow();
   startClipboardWatcher();
@@ -197,14 +201,6 @@ ipcMain.handle('dialog:choose-folder', async () => {
   return settings.outputDir;
 });
 
-// Used by "Download now" — lets the user pick a one-off destination
-// WITHOUT changing their saved default download folder.
-ipcMain.handle('dialog:choose-folder-once', async () => {
-  const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'] });
-  if (res.canceled || !res.filePaths.length) return null;
-  return res.filePaths[0];
-});
-
 ipcMain.handle('settings:get', () => settings);
 ipcMain.handle('settings:set', (_evt, partial) => {
   settings = { ...settings, ...partial };
@@ -219,18 +215,7 @@ ipcMain.handle('history:clear', () => {
   return history;
 });
 ipcMain.handle('shell:open-folder', (_evt, filePath) => {
-  if (filePath && fs.existsSync(filePath)) {
-    shell.showItemInFolder(filePath);
-    return { ok: true };
-  }
-  // File path unknown or the file no longer exists — fall back to opening
-  // just the containing folder so the click still does *something* useful.
-  const dir = filePath ? path.dirname(filePath) : null;
-  if (dir && fs.existsSync(dir)) {
-    shell.openPath(dir);
-    return { ok: true, fallback: true };
-  }
-  return { ok: false };
+  shell.showItemInFolder(filePath);
 });
 ipcMain.handle('shell:open-path', (_evt, filePath) => {
   shell.openPath(filePath);
@@ -274,9 +259,6 @@ function buildArgs(job) {
   }
 
   args.push('--ffmpeg-location', settings.ffmpegPath);
-  // Print the REAL final path after merging/converting/embedding — this is
-  // what makes "click title to open in file explorer" always accurate.
-  args.push('--print', 'after_move:NEXGRAB_FINAL_PATH::%(filepath)s');
   args.push('-o', path.join(job.outputDir, '%(title)s.%(ext)s'));
   args.push(url);
   return args;
@@ -284,9 +266,8 @@ function buildArgs(job) {
 
 const PROGRESS_RE = /\[download\]\s+([\d.]+)%\s+of\s+~?\s*([\d.]+\w+)\s+at\s+([\d.]+\w+\/s|Unknown)\s+ETA\s+([\d:]+|Unknown)/;
 const DEST_RE = /\[download\] Destination: (.+)/;
-const ALREADY_RE = /\[download\] (.+) has already been downloaded/;
+const ALREADY_RE = /has already been downloaded/;
 const MERGE_RE = /\[Merger\]|Merging formats/;
-const FINAL_PATH_RE = /^NEXGRAB_FINAL_PATH::(.+)$/;
 
 ipcMain.handle('download:start', async (_evt, job) => {
   const args = buildArgs(job);
@@ -296,59 +277,41 @@ ipcMain.handle('download:start', async (_evt, job) => {
   const send = (channel, payload) => mainWindow?.webContents.send(channel, { jobId: job.jobId, ...payload });
 
   let destination = null;
-  let stdoutBuffer = '';
-
-  function processLine(line) {
-    if (!line.trim()) return;
-
-    const finalPath = line.match(FINAL_PATH_RE);
-    if (finalPath) {
-      destination = finalPath[1].trim();
-      activeJobs.get(job.jobId).destination = destination;
-      return;
-    }
-
-    const dest = line.match(DEST_RE);
-    if (dest) { destination = dest[1]; activeJobs.get(job.jobId).destination = destination; }
-
-    if (MERGE_RE.test(line)) {
-      send('download:progress', { status: 'merging', percent: 99 });
-      return;
-    }
-    if (ALREADY_RE.test(line)) {
-      const already = line.match(ALREADY_RE);
-      if (already) { destination = already[1]; activeJobs.get(job.jobId).destination = destination; }
-      send('download:progress', { status: 'exists', percent: 100, path: destination });
-      return;
-    }
-
-    const m = line.match(PROGRESS_RE);
-    if (m) {
-      send('download:progress', {
-        status: 'downloading',
-        percent: parseFloat(m[1]),
-        size: m[2],
-        speed: m[3],
-        eta: m[4]
-      });
-    }
-  }
 
   proc.stdout.on('data', (chunk) => {
-    // Buffer partial lines across chunk boundaries — a single line (especially
-    // the long final-path marker) can otherwise get split across two 'data'
-    // events and silently fail to match any regex.
-    stdoutBuffer += chunk.toString();
-    const lines = stdoutBuffer.split(/\r\n|\r|\n/);
-    stdoutBuffer = lines.pop(); // keep the last (possibly incomplete) line buffered
-    lines.forEach(processLine);
+    const text = chunk.toString();
+    text.split(/\r|\n/).forEach((line) => {
+      if (!line.trim()) return;
+
+      const dest = line.match(DEST_RE);
+      if (dest) { destination = dest[1]; activeJobs.get(job.jobId).destination = destination; }
+
+      if (MERGE_RE.test(line)) {
+        send('download:progress', { status: 'merging', percent: 99 });
+        return;
+      }
+      if (ALREADY_RE.test(line)) {
+        send('download:progress', { status: 'exists', percent: 100 });
+        return;
+      }
+
+      const m = line.match(PROGRESS_RE);
+      if (m) {
+        send('download:progress', {
+          status: 'downloading',
+          percent: parseFloat(m[1]),
+          size: m[2],
+          speed: m[3],
+          eta: m[4]
+        });
+      }
+    });
   });
 
   let stderrBuf = '';
   proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString(); });
 
   proc.on('close', (code) => {
-    if (stdoutBuffer.trim()) { processLine(stdoutBuffer); stdoutBuffer = ''; }
     activeJobs.delete(job.jobId);
     if (code === 0) {
       const entry = {

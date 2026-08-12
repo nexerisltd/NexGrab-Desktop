@@ -254,10 +254,7 @@
           <div id="quality-area"></div>
           <div id="opts-area"></div>
 
-          <div class="btn-row">
-            <button class="primary-btn" id="download-now-btn">⬇ Download now</button>
-            <button class="ghost-btn add-queue-btn" id="add-to-queue-btn">+ Add to queue</button>
-          </div>
+          <button class="primary-btn add-queue-btn" id="add-to-queue-btn">Add to queue</button>
         </div>
       </div>
     `;
@@ -275,12 +272,6 @@
     });
 
     $('#add-to-queue-btn').addEventListener('click', () => enqueueSingle(info));
-
-    $('#download-now-btn').addEventListener('click', async () => {
-      const dir = await window.nex.chooseFolderOnce();
-      if (!dir) { toast('Download cancelled — no folder selected'); return; }
-      enqueueSingle(info, dir);
-    });
   }
 
   function renderQualityArea(info) {
@@ -344,7 +335,7 @@
     $('#opt-sponsorblock').addEventListener('change', (e) => { sponsorBlockOn = e.target.checked; });
   }
 
-  function enqueueSingle(info, forcedOutputDir) {
+  function enqueueSingle(info) {
     const trimStart = $('#opt-trim-start')?.value.trim() || '';
     const trimEnd = $('#opt-trim-end')?.value.trim() || '';
 
@@ -362,7 +353,7 @@
       subLangs: (info.subtitleLangs && info.subtitleLangs[0]) || 'en.*',
       sponsorBlock: sponsorBlockOn,
       trimStart, trimEnd,
-      outputDir: forcedOutputDir || settings.outputDir,
+      outputDir: settings.outputDir,
       embedThumbnail: settings.embedThumbnail,
       embedMetadata: settings.embedMetadata,
       rateLimit: settings.rateLimit
@@ -370,15 +361,13 @@
     addJobToUI(job);
     pendingQueue.push(job);
     drainQueue();
-    toast(forcedOutputDir ? `Downloading to ${forcedOutputDir}` : 'Added to queue', 'success');
+    toast('Added to queue', 'success');
   }
 
   // ---------------------------------------------------------------------
   // Playlist preview + config
   // ---------------------------------------------------------------------
   function renderPlaylistPreview(info) {
-    currentMode = 'video';
-    subtitlesOn = false;
     const preview = $('#preview');
     preview.hidden = false;
     info.entries.forEach((e) => selectedPlaylistIds.add(e.id));
@@ -405,15 +394,10 @@
             `).join('')}
           </div>
 
-          <div class="mode-switch">
-            <button data-mode="video" class="active">🎬 Video</button>
-            <button data-mode="audio">🎧 Audio only</button>
-          </div>
-
           <div id="quality-area"></div>
           <div id="opts-area"></div>
 
-          <button class="primary-btn add-queue-btn" id="add-playlist-btn">+ Add selected to queue (each video downloads separately)</button>
+          <button class="primary-btn add-queue-btn" id="add-playlist-btn">Add selected to queue</button>
         </div>
       </div>
     `;
@@ -421,15 +405,6 @@
     const fakeInfoForOptions = { hasSubtitles: false, subtitleLangs: [] };
     renderQualityArea({ availableHeights: [1080, 720, 480, 360] });
     renderOptsArea(fakeInfoForOptions);
-
-    $$('.mode-switch button', preview).forEach((btn) => {
-      btn.addEventListener('click', () => {
-        currentMode = btn.dataset.mode;
-        $$('.mode-switch button', preview).forEach((b) => b.classList.toggle('active', b === btn));
-        renderQualityArea({ availableHeights: [1080, 720, 480, 360] });
-        renderOptsArea(fakeInfoForOptions);
-      });
-    });
 
     $$('.playlist-item input', preview).forEach((cb) => {
       cb.addEventListener('change', () => {
@@ -490,7 +465,7 @@
     el.innerHTML = `
       <img src="${job.thumbnail || ''}" onerror="this.style.visibility='hidden'"/>
       <div class="qi-body">
-        <p class="qi-title" id="title-${job.jobId}">${escapeHtml(job.title)}</p>
+        <p class="qi-title">${escapeHtml(job.title)}</p>
         <div class="qi-status">
           <span class="qi-tag ${job.mode}">${job.mode}</span>
           <span class="qi-state">Waiting…</span>
@@ -549,17 +524,15 @@
         fill.style.width = '99%';
         break;
       case 'exists':
-        stateEl.textContent = 'Already downloaded — click title to open';
+        stateEl.textContent = 'Already downloaded';
         fill.style.width = '100%';
         fill.classList.add('done');
-        makeTitleClickable(data.jobId, data.path);
         finishJob(data.jobId);
         break;
       case 'done':
-        stateEl.textContent = 'Done ✓ — click title to open';
+        stateEl.textContent = 'Done ✓';
         fill.style.width = '100%';
         fill.classList.add('done');
-        makeTitleClickable(data.jobId, data.path);
         finishJob(data.jobId);
         break;
       case 'error':
@@ -569,20 +542,6 @@
         break;
     }
   });
-
-  function makeTitleClickable(jobId, filePath) {
-    if (!filePath) return;
-    const titleEl = document.getElementById(`title-${jobId}`);
-    if (!titleEl) return;
-    titleEl.style.cursor = 'pointer';
-    titleEl.style.textDecoration = 'underline dotted';
-    titleEl.title = filePath;
-    titleEl.addEventListener('click', async () => {
-      const res = await window.nex.openFolder(filePath);
-      if (!res || !res.ok) toast("Couldn't locate that file — it may have been moved or renamed", 'error');
-      else if (res.fallback) toast('Opened the folder (exact file not found)');
-    });
-  }
 
   function finishJob(jobId) {
     activeCount = Math.max(0, activeCount - 1);
