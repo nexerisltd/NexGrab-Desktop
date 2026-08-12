@@ -5,18 +5,18 @@
   // State
   // ---------------------------------------------------------------------
   let settings = {};
-  let currentInfo = null;       // last fetched info (video or playlist)
-  let currentMode = 'video';    // 'video' | 'audio'
+  let currentInfo = null;
+  let currentMode = 'video';
   let selectedHeight = null;
   let selectedAudioFormat = 'mp3';
-  let selectedAudioQuality = '0'; // yt-dlp: 0 = best
+  let selectedAudioQuality = '0';
   let subtitlesOn = false;
   let sponsorBlockOn = false;
   let selectedPlaylistIds = new Set();
 
-  const pendingQueue = [];      // jobs waiting for a free slot
+  const pendingQueue = [];
   let activeCount = 0;
-  const jobRegistry = new Map(); // jobId -> { el, job }
+  const jobRegistry = new Map();
 
   // ---------------------------------------------------------------------
   // Helpers
@@ -80,6 +80,8 @@
     applyTheme(localStorage.getItem('nexgrab-theme') || settings.theme || 'dark');
 
     $('#output-dir').value = settings.outputDir;
+    $('#cookies-browser').value = settings.cookiesFromBrowser || '';
+    $('#cookies-file').value = settings.cookiesFilePath || '';
     $('#concurrency').value = settings.concurrency;
     $('#concurrency-val').textContent = settings.concurrency;
     $('#rate-limit').value = settings.rateLimit || '';
@@ -121,6 +123,14 @@
   $('#choose-folder-btn').addEventListener('click', async () => {
     const dir = await window.nex.chooseFolder();
     if (dir) { $('#output-dir').value = dir; settings.outputDir = dir; }
+  });
+
+  $('#cookies-browser').addEventListener('change', async (e) => {
+    settings = await window.nex.setSettings({ cookiesFromBrowser: e.target.value });
+  });
+  $('#choose-cookies-file-btn').addEventListener('click', async () => {
+  const filePath = await window.nex.chooseCookiesFile();
+  if (filePath) { $('#cookies-file').value = filePath; settings.cookiesFilePath = filePath; }
   });
 
   $('#concurrency').addEventListener('input', (e) => { $('#concurrency-val').textContent = e.target.value; });
@@ -254,7 +264,10 @@
           <div id="quality-area"></div>
           <div id="opts-area"></div>
 
-          <button class="primary-btn add-queue-btn" id="add-to-queue-btn">Add to queue</button>
+          <div class="btn-row">
+            <button class="primary-btn" id="download-now-btn">⬇ Download now</button>
+            <button class="ghost-btn add-queue-btn" id="add-to-queue-btn">+ Add to queue</button>
+          </div>
         </div>
       </div>
     `;
@@ -272,6 +285,12 @@
     });
 
     $('#add-to-queue-btn').addEventListener('click', () => enqueueSingle(info));
+
+    $('#download-now-btn').addEventListener('click', async () => {
+      const dir = await window.nex.chooseFolderOnce();
+      if (!dir) { toast('Download cancelled — no folder selected'); return; }
+      enqueueSingle(info, dir);
+    });
   }
 
   function renderQualityArea(info) {
@@ -335,7 +354,7 @@
     $('#opt-sponsorblock').addEventListener('change', (e) => { sponsorBlockOn = e.target.checked; });
   }
 
-  function enqueueSingle(info) {
+  function enqueueSingle(info, forcedOutputDir) {
     const trimStart = $('#opt-trim-start')?.value.trim() || '';
     const trimEnd = $('#opt-trim-end')?.value.trim() || '';
 
@@ -353,7 +372,7 @@
       subLangs: (info.subtitleLangs && info.subtitleLangs[0]) || 'en.*',
       sponsorBlock: sponsorBlockOn,
       trimStart, trimEnd,
-      outputDir: settings.outputDir,
+      outputDir: forcedOutputDir || settings.outputDir,
       embedThumbnail: settings.embedThumbnail,
       embedMetadata: settings.embedMetadata,
       rateLimit: settings.rateLimit
@@ -361,13 +380,15 @@
     addJobToUI(job);
     pendingQueue.push(job);
     drainQueue();
-    toast('Added to queue', 'success');
+    toast(forcedOutputDir ? `Downloading to ${forcedOutputDir}` : 'Added to queue', 'success');
   }
 
   // ---------------------------------------------------------------------
   // Playlist preview + config
   // ---------------------------------------------------------------------
   function renderPlaylistPreview(info) {
+    currentMode = 'video';
+    subtitlesOn = false;
     const preview = $('#preview');
     preview.hidden = false;
     info.entries.forEach((e) => selectedPlaylistIds.add(e.id));
@@ -394,10 +415,15 @@
             `).join('')}
           </div>
 
+          <div class="mode-switch">
+            <button data-mode="video" class="active">🎬 Video</button>
+            <button data-mode="audio">🎧 Audio only</button>
+          </div>
+
           <div id="quality-area"></div>
           <div id="opts-area"></div>
 
-          <button class="primary-btn add-queue-btn" id="add-playlist-btn">Add selected to queue</button>
+          <button class="primary-btn add-queue-btn" id="add-playlist-btn">+ Add selected to queue (each video downloads separately)</button>
         </div>
       </div>
     `;
@@ -405,6 +431,15 @@
     const fakeInfoForOptions = { hasSubtitles: false, subtitleLangs: [] };
     renderQualityArea({ availableHeights: [1080, 720, 480, 360] });
     renderOptsArea(fakeInfoForOptions);
+
+    $$('.mode-switch button', preview).forEach((btn) => {
+      btn.addEventListener('click', () => {
+        currentMode = btn.dataset.mode;
+        $$('.mode-switch button', preview).forEach((b) => b.classList.toggle('active', b === btn));
+        renderQualityArea({ availableHeights: [1080, 720, 480, 360] });
+        renderOptsArea(fakeInfoForOptions);
+      });
+    });
 
     $$('.playlist-item input', preview).forEach((cb) => {
       cb.addEventListener('change', () => {
@@ -425,7 +460,7 @@
     $('#add-playlist-btn').addEventListener('click', () => {
       const chosen = info.entries.filter((e) => selectedPlaylistIds.has(e.id));
       if (!chosen.length) { toast('Select at least one video'); return; }
-      const trimStart = '', trimEnd = ''; // trimming disabled for bulk playlist adds
+      const trimStart = '', trimEnd = '';
       chosen.forEach((e) => {
         const job = {
           jobId: uid(),
@@ -465,7 +500,7 @@
     el.innerHTML = `
       <img src="${job.thumbnail || ''}" onerror="this.style.visibility='hidden'"/>
       <div class="qi-body">
-        <p class="qi-title">${escapeHtml(job.title)}</p>
+        <p class="qi-title" id="title-${job.jobId}">${escapeHtml(job.title)}</p>
         <div class="qi-status">
           <span class="qi-tag ${job.mode}">${job.mode}</span>
           <span class="qi-state">Waiting…</span>
@@ -524,15 +559,17 @@
         fill.style.width = '99%';
         break;
       case 'exists':
-        stateEl.textContent = 'Already downloaded';
+        stateEl.textContent = 'Already downloaded — click title to open';
         fill.style.width = '100%';
         fill.classList.add('done');
+        makeTitleClickable(data.jobId, data.path);
         finishJob(data.jobId);
         break;
       case 'done':
-        stateEl.textContent = 'Done ✓';
+        stateEl.textContent = 'Done ✓ — click title to open';
         fill.style.width = '100%';
         fill.classList.add('done');
+        makeTitleClickable(data.jobId, data.path);
         finishJob(data.jobId);
         break;
       case 'error':
@@ -542,6 +579,20 @@
         break;
     }
   });
+
+  function makeTitleClickable(jobId, filePath) {
+    if (!filePath) return;
+    const titleEl = document.getElementById(`title-${jobId}`);
+    if (!titleEl) return;
+    titleEl.style.cursor = 'pointer';
+    titleEl.style.textDecoration = 'underline dotted';
+    titleEl.title = filePath;
+    titleEl.addEventListener('click', async () => {
+      const res = await window.nex.openFolder(filePath);
+      if (!res || !res.ok) toast("Couldn't locate that file — it may have been moved or renamed", 'error');
+      else if (res.fallback) toast('Opened the folder (exact file not found)');
+    });
+  }
 
   function finishJob(jobId) {
     activeCount = Math.max(0, activeCount - 1);

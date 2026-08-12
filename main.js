@@ -6,8 +6,7 @@ const { spawn, execFile } = require('child_process');
 // ---------------------------------------------------------------------------
 // Bundled binaries — NexGrab ships its own yt-dlp + ffmpeg so users never
 // have to install anything separately. Falls back to PATH lookup in dev
-// if the bundled binary isn't present yet (e.g. before you've dropped the
-// platform binaries into assets/bin/<platform>/).
+// if the bundled binary isn't present yet.
 // ---------------------------------------------------------------------------
 const PLATFORM_DIR = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux';
 const BIN_DIR = app.isPackaged
@@ -20,11 +19,9 @@ const FFMPEG_NAME = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
 const BUNDLED_YTDLP = path.join(BIN_DIR, YTDLP_NAME);
 const BUNDLED_FFMPEG = path.join(BIN_DIR, FFMPEG_NAME);
 
-// If the bundled binary exists, use it; otherwise fall back to whatever is on PATH.
 const YTDLP_BIN = fs.existsSync(BUNDLED_YTDLP) ? BUNDLED_YTDLP : 'yt-dlp';
 const FFMPEG_BIN = fs.existsSync(BUNDLED_FFMPEG) ? BUNDLED_FFMPEG : 'ffmpeg';
 
-// macOS/Linux packaging can strip the execute bit — restore it defensively.
 if (process.platform !== 'win32') {
   try { fs.chmodSync(YTDLP_BIN, 0o755); } catch {}
   try { fs.chmodSync(FFMPEG_BIN, 0o755); } catch {}
@@ -47,7 +44,8 @@ const DEFAULT_SETTINGS = {
   embedMetadata: true,
   clipboardWatch: true,
   sponsorBlock: false,
-  rateLimit: '' // e.g. "5M" for 5MB/s, empty = unlimited
+  rateLimit: '', // e.g. "5M" for 5MB/s, empty = unlimited
+  cookiesFromBrowser: '' // e.g. "chrome", "edge", "firefox" — fixes "Sign in to confirm you're not a bot"
 };
 
 function readJSON(file, fallback) {
@@ -128,8 +126,11 @@ function startClipboardWatcher() {
 // Helpers to run yt-dlp
 // ---------------------------------------------------------------------------
 function runYtDlpJSON(args) {
+  const finalArgs = settings.cookiesFromBrowser
+    ? ['--cookies-from-browser', settings.cookiesFromBrowser, ...args]
+    : args;
   return new Promise((resolve, reject) => {
-    execFile(settings.ytdlpPath, args, { maxBuffer: 1024 * 1024 * 64 }, (err, stdout, stderr) => {
+    execFile(settings.ytdlpPath, finalArgs, { maxBuffer: 1024 * 1024 * 64 }, (err, stdout, stderr) => {
       if (err) return reject(new Error(stderr || err.message));
       resolve(stdout);
     });
@@ -201,6 +202,14 @@ ipcMain.handle('dialog:choose-folder', async () => {
   return settings.outputDir;
 });
 
+// Used by "Download now" — lets the user pick a one-off destination
+// WITHOUT changing their saved default download folder.
+ipcMain.handle('dialog:choose-folder-once', async () => {
+  const res = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'] });
+  if (res.canceled || !res.filePaths.length) return null;
+  return res.filePaths[0];
+});
+
 ipcMain.handle('settings:get', () => settings);
 ipcMain.handle('settings:set', (_evt, partial) => {
   settings = { ...settings, ...partial };
@@ -215,7 +224,16 @@ ipcMain.handle('history:clear', () => {
   return history;
 });
 ipcMain.handle('shell:open-folder', (_evt, filePath) => {
-  shell.showItemInFolder(filePath);
+  if (filePath && fs.existsSync(filePath)) {
+    shell.showItemInFolder(filePath);
+    return { ok: true };
+  }
+  const dir = filePath ? path.dirname(filePath) : null;
+  if (dir && fs.existsSync(dir)) {
+    shell.openPath(dir);
+    return { ok: true, fallback: true };
+  }
+  return { ok: false };
 });
 ipcMain.handle('shell:open-path', (_evt, filePath) => {
   shell.openPath(filePath);
@@ -232,6 +250,7 @@ function buildArgs(job) {
 
   const args = ['--newline', '--no-warnings', '--ignore-config'];
 
+  if (settings.cookiesFromBrowser) args.push('--cookies-from-browser', settings.cookiesFromBrowser);
   if (rateLimit) args.push('--limit-rate', rateLimit);
 
   if (mode === 'audio') {
@@ -259,6 +278,9 @@ function buildArgs(job) {
   }
 
   args.push('--ffmpeg-location', settings.ffmpegPath);
+  // Print the REAL final path after merging/converting/embedding — this is
+  // what makes "click title to open in file explorer" always accurate.
+  args.push('--print', 'after_move:NEXGRAB_FINAL_PATH::%(filepath)s');
   args.push('-o', path.join(job.outputDir, '%(title)s.%(ext)s'));
   args.push(url);
   return args;
@@ -266,8 +288,9 @@ function buildArgs(job) {
 
 const PROGRESS_RE = /\[download\]\s+([\d.]+)%\s+of\s+~?\s*([\d.]+\w+)\s+at\s+([\d.]+\w+\/s|Unknown)\s+ETA\s+([\d:]+|Unknown)/;
 const DEST_RE = /\[download\] Destination: (.+)/;
-const ALREADY_RE = /has already been downloaded/;
+const ALREADY_RE = /\[download\] (.+) has already been downloaded/;
 const MERGE_RE = /\[Merger\]|Merging formats/;
+const FINAL_PATH_RE = /^NEXGRAB_FINAL_PATH::(.+)$/;
 
 ipcMain.handle('download:start', async (_evt, job) => {
   const args = buildArgs(job);
@@ -277,41 +300,59 @@ ipcMain.handle('download:start', async (_evt, job) => {
   const send = (channel, payload) => mainWindow?.webContents.send(channel, { jobId: job.jobId, ...payload });
 
   let destination = null;
+  let stdoutBuffer = '';
+
+  function processLine(line) {
+    if (!line.trim()) return;
+
+    const finalPath = line.match(FINAL_PATH_RE);
+    if (finalPath) {
+      destination = finalPath[1].trim();
+      activeJobs.get(job.jobId).destination = destination;
+      return;
+    }
+
+    const dest = line.match(DEST_RE);
+    if (dest) { destination = dest[1]; activeJobs.get(job.jobId).destination = destination; }
+
+    if (MERGE_RE.test(line)) {
+      send('download:progress', { status: 'merging', percent: 99 });
+      return;
+    }
+    if (ALREADY_RE.test(line)) {
+      const already = line.match(ALREADY_RE);
+      if (already) { destination = already[1]; activeJobs.get(job.jobId).destination = destination; }
+      send('download:progress', { status: 'exists', percent: 100, path: destination });
+      return;
+    }
+
+    const m = line.match(PROGRESS_RE);
+    if (m) {
+      send('download:progress', {
+        status: 'downloading',
+        percent: parseFloat(m[1]),
+        size: m[2],
+        speed: m[3],
+        eta: m[4]
+      });
+    }
+  }
 
   proc.stdout.on('data', (chunk) => {
-    const text = chunk.toString();
-    text.split(/\r|\n/).forEach((line) => {
-      if (!line.trim()) return;
-
-      const dest = line.match(DEST_RE);
-      if (dest) { destination = dest[1]; activeJobs.get(job.jobId).destination = destination; }
-
-      if (MERGE_RE.test(line)) {
-        send('download:progress', { status: 'merging', percent: 99 });
-        return;
-      }
-      if (ALREADY_RE.test(line)) {
-        send('download:progress', { status: 'exists', percent: 100 });
-        return;
-      }
-
-      const m = line.match(PROGRESS_RE);
-      if (m) {
-        send('download:progress', {
-          status: 'downloading',
-          percent: parseFloat(m[1]),
-          size: m[2],
-          speed: m[3],
-          eta: m[4]
-        });
-      }
-    });
+    // Buffer partial lines across chunk boundaries — a single line (especially
+    // the long final-path marker) can otherwise split across two 'data'
+    // events and silently fail to match any regex.
+    stdoutBuffer += chunk.toString();
+    const lines = stdoutBuffer.split(/\r\n|\r|\n/);
+    stdoutBuffer = lines.pop();
+    lines.forEach(processLine);
   });
 
   let stderrBuf = '';
   proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString(); });
 
   proc.on('close', (code) => {
+    if (stdoutBuffer.trim()) { processLine(stdoutBuffer); stdoutBuffer = ''; }
     activeJobs.delete(job.jobId);
     if (code === 0) {
       const entry = {

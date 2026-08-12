@@ -74,7 +74,7 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 
 button { font-family: var(--font-body); cursor: pointer; }
-input { font-family: var(--font-body); }
+input, select { font-family: var(--font-body); }
 
 /* --------------------------------------------------------------------- */
 /* Titlebar                                                               */
@@ -236,9 +236,6 @@ input { font-family: var(--font-body); }
 
 /* --------------------------------------------------------------------- */
 /* Signature element: the Pulsebar                                        */
-/* An idle state resembles a soft audio waveform; while a fetch/download   */
-/* is running it becomes a directional "film-strip" sweep — a wink at the */
-/* video/audio duality of the product itself.                             */
 /* --------------------------------------------------------------------- */
 .pulsebar {
   height: 26px;
@@ -356,6 +353,8 @@ input { font-family: var(--font-body); }
 .trim-row span { color: var(--text-faint); font-size: 12px; }
 
 .add-queue-btn { width: 100%; justify-content: center; }
+.btn-row { display: flex; gap: 10px; margin-top: 4px; }
+.btn-row .primary-btn, .btn-row .ghost-btn { flex: 1; justify-content: center; }
 
 /* Playlist list */
 .playlist-list { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin: 10px 0 16px; }
@@ -446,10 +445,11 @@ input { font-family: var(--font-body); }
 .field { margin-bottom: 20px; }
 .field label { display: block; font-size: 12.5px; color: var(--text-muted); margin-bottom: 7px; }
 .field label .muted { color: var(--text-faint); font-weight: 400; }
-.field input[type="text"] {
+.field input[type="text"], .field select {
   width: 100%; background: var(--surface-2); border: 1px solid var(--border);
   color: var(--text); border-radius: var(--radius-sm); padding: 9px 12px; font-size: 13px;
 }
+.field select { cursor: pointer; }
 .row-input { display: flex; gap: 8px; }
 .row-input input { flex: 1; }
 

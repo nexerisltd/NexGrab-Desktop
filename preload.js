@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('nex', {
   fetchInfo: (url) => ipcRenderer.invoke('ytdlp:fetch-info', url),
 
   chooseFolder: () => ipcRenderer.invoke('dialog:choose-folder'),
+  chooseFolderOnce: () => ipcRenderer.invoke('dialog:choose-folder-once'),
+  chooseCookiesFile: () => ipcRenderer.invoke('dialog:choose-cookies-file'),
 
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (partial) => ipcRenderer.invoke('settings:set', partial),
