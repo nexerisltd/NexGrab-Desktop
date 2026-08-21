@@ -104,12 +104,161 @@
       status.textContent = `yt-dlp ${res.version} ready`;
       status.className = 'hint-line ok';
     } else {
-      status.textContent = `Bundled yt-dlp not found — reinstall NexGrab or check the assets/bin folder.`;
+      status.textContent = `yt-dlp isn't ready yet — it may still be downloading (see the setup screen), or check your internet connection and retry from Settings → Dependencies.`;
       status.className = 'hint-line err';
     }
   }
 
-  initSettings().then(checkYtDlp);
+  initSettings().then(() => { checkYtDlp(); refreshDepsStatus(); });
+  refreshPotStatus();
+
+  // ---------------------------------------------------------------------
+  // Dependencies (auto-downloaded yt-dlp / ffmpeg) — first-launch overlay
+  // + Settings → Dependencies panel
+  // ---------------------------------------------------------------------
+  let depsOverlayShown = false;
+
+  function showDepsOverlay() {
+    depsOverlayShown = true;
+    $('#deps-overlay').hidden = false;
+  }
+  function hideDepsOverlay() {
+    depsOverlayShown = false;
+    $('#deps-overlay').hidden = true;
+    $('#deps-overlay-error').hidden = true;
+    $('#deps-overlay-retry').style.display = 'none';
+  }
+
+  window.nex.onDepsProgress((data) => {
+    // Any progress event at all means a real download/extract is happening
+    // (already-installed binaries never emit these) — show the overlay.
+    if (!depsOverlayShown) showDepsOverlay();
+    const label = data.component === 'yt-dlp' ? 'yt-dlp' : 'ffmpeg';
+    const text = $('#deps-overlay-text');
+    const fill = $('#deps-overlay-fill');
+
+    if (data.phase === 'downloading') {
+      const pct = data.percent || 0;
+      text.textContent = `Setting up dependencies… ${label} ${pct}%`;
+      fill.style.width = `${pct}%`;
+    } else if (data.phase === 'verifying') {
+      text.textContent = `Verifying ${label}…`;
+    } else if (data.phase === 'extracting') {
+      text.textContent = `Extracting ${label}…`;
+      fill.style.width = '100%';
+    } else if (data.phase === 'update-found') {
+      text.textContent = `Updating ${label}…`;
+    } else if (data.phase === 'done') {
+      text.textContent = `${label} ready`;
+    }
+  });
+
+  window.nex.onDepsReady((data) => {
+    if (data.ok) {
+      hideDepsOverlay();
+      checkYtDlp();
+      refreshDepsStatus();
+    } else {
+      // Keep the overlay up with a clear error + retry button rather than
+      // letting the app proceed with no working yt-dlp/ffmpeg.
+      showDepsOverlay();
+      $('#deps-overlay-text').textContent = 'Setup failed';
+      $('#deps-overlay-error').hidden = false;
+      $('#deps-overlay-error').textContent = data.error || "Couldn't download required components. Check your internet connection and retry.";
+      $('#deps-overlay-retry').style.display = 'inline-flex';
+    }
+  });
+
+  window.nex.onDepsAutoUpdated(() => {
+    toast('yt-dlp / ffmpeg updated in the background', 'success');
+    refreshDepsStatus();
+  });
+
+  $('#deps-overlay-retry').addEventListener('click', async () => {
+    $('#deps-overlay-error').hidden = true;
+    $('#deps-overlay-retry').style.display = 'none';
+    $('#deps-overlay-text').textContent = 'Setting up dependencies…';
+    $('#deps-overlay-fill').style.width = '0%';
+    const res = await window.nex.redownloadDeps();
+    if (res.ok) { hideDepsOverlay(); checkYtDlp(); refreshDepsStatus(); }
+    else {
+      $('#deps-overlay-text').textContent = 'Setup failed';
+      $('#deps-overlay-error').hidden = false;
+      $('#deps-overlay-error').textContent = res.error;
+      $('#deps-overlay-retry').style.display = 'inline-flex';
+    }
+  });
+
+  async function refreshDepsStatus() {
+    const status = await window.nex.getDepsStatus();
+    $('#dep-ytdlp-version').textContent = status.ytdlp.installed ? (status.ytdlp.version || 'installed') : 'not installed';
+    $('#dep-ffmpeg-version').textContent = status.ffmpeg.installed ? (status.ffmpeg.version || 'installed') : 'not installed';
+  }
+
+  $('#deps-check-btn').addEventListener('click', async () => {
+    const btn = $('#deps-check-btn');
+    const line = $('#deps-status-line');
+    btn.disabled = true;
+    line.textContent = 'Checking for updates…';
+    line.className = 'hint-line';
+    const res = await window.nex.checkDepsUpdates();
+    btn.disabled = false;
+    if (!res.ok) {
+      line.textContent = `Update check failed: ${res.error}`;
+      line.className = 'hint-line err';
+      return;
+    }
+    const updated = [];
+    if (res.ytdlp.updated) updated.push(`yt-dlp → ${res.ytdlp.version}`);
+    if (res.ffmpeg.updated) updated.push(`ffmpeg → ${res.ffmpeg.version}`);
+    line.textContent = updated.length ? `Updated: ${updated.join(', ')}` : 'Already up to date';
+    line.className = 'hint-line ok';
+    refreshDepsStatus();
+  });
+
+  $('#deps-redownload-btn').addEventListener('click', async () => {
+    const btn = $('#deps-redownload-btn');
+    const line = $('#deps-status-line');
+    btn.disabled = true;
+    line.textContent = 'Re-downloading yt-dlp and ffmpeg…';
+    line.className = 'hint-line';
+    const res = await window.nex.redownloadDeps();
+    btn.disabled = false;
+    if (res.ok) {
+      line.textContent = 'Re-download complete';
+      line.className = 'hint-line ok';
+      checkYtDlp();
+    } else {
+      line.textContent = res.error;
+      line.className = 'hint-line err';
+    }
+    refreshDepsStatus();
+  });
+
+  // ---------------------------------------------------------------------
+  // Optional local PO Token provider sidecar
+  // ---------------------------------------------------------------------
+  async function refreshPotStatus() {
+    const res = await window.nex.getPotStatus();
+    $('#toggle-pot-provider').checked = !!res.enabled;
+    updatePotStatusLine(res);
+  }
+
+  function updatePotStatusLine(res) {
+    const line = $('#pot-provider-status');
+    if (!res.enabled) { line.textContent = ''; return; }
+    if (res.error) { line.textContent = `Couldn't start the PO Token provider: ${res.error}`; line.className = 'hint-line err'; return; }
+    line.textContent = res.running ? 'Provider running locally' : 'Starting…';
+    line.className = 'hint-line ok';
+  }
+
+  $('#toggle-pot-provider').addEventListener('change', async (e) => {
+    const enabled = e.target.checked;
+    $('#pot-provider-status').textContent = enabled ? 'Starting…' : '';
+    const res = await window.nex.togglePotProvider(enabled);
+    if (enabled && res.error) e.target.checked = false;
+    updatePotStatusLine({ enabled, ...res });
+  });
 
   // ---------------------------------------------------------------------
   // Settings drawer
@@ -574,6 +723,7 @@
         <button class="qi-cancel" title="Cancel">✕</button>
       </div>
     `;
+    // Retry button is inserted here on failure, see addRetryButton() below.
     $('#queue-list').prepend(el);
     jobRegistry.set(job.jobId, { el, job });
 
@@ -621,6 +771,9 @@
         stateEl.textContent = 'Merging audio & video…';
         fill.style.width = '99%';
         break;
+      case 'retrying':
+        stateEl.textContent = data.message || 'Retrying with a different client…';
+        break;
       case 'exists':
         stateEl.textContent = 'Already downloaded — click title to open';
         fill.style.width = '100%';
@@ -636,12 +789,41 @@
         finishJob(data.jobId);
         break;
       case 'error':
-        stateEl.textContent = `Error: ${(data.error || '').slice(0, 90)}`;
+        stateEl.textContent = `Failed — ${(data.error || '').slice(0, 90)}`;
         fill.classList.add('error');
+        if (data.retryable) addRetryButton(data.jobId);
         finishJob(data.jobId);
         break;
     }
   });
+
+  // Playlist/queue items that fail (e.g. an individual video still blocked
+  // after exhausting every client fallback) get a retry button instead of
+  // dead-ending — clicking it just re-queues the same job. The rest of the
+  // queue is never stopped by one item's failure; each job already runs
+  // independently in the queue engine above.
+  function addRetryButton(jobId) {
+    const reg = jobRegistry.get(jobId);
+    if (!reg) return;
+    const actions = reg.el.querySelector('.qi-actions');
+    if (actions.querySelector('.qi-retry')) return;
+
+    const btn = document.createElement('button');
+    btn.className = 'qi-cancel qi-retry';
+    btn.title = 'Retry';
+    btn.textContent = '↻';
+    btn.addEventListener('click', () => {
+      btn.remove();
+      const fill = reg.el.querySelector('.qi-bar-fill');
+      fill.classList.remove('error', 'done');
+      fill.style.width = '0%';
+      reg.el.querySelector('.qi-state').textContent = 'Waiting…';
+      pendingQueue.push(reg.job);
+      updateQueueCount();
+      drainQueue();
+    });
+    actions.prepend(btn);
+  }
 
   function makeTitleClickable(jobId, filePath) {
     if (!filePath) return;

@@ -2,30 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Notification, Men
 const path = require('path');
 const fs = require('fs');
 const { spawn, execFile } = require('child_process');
-
-// ---------------------------------------------------------------------------
-// Bundled binaries — NexGrab ships its own yt-dlp + ffmpeg so users never
-// have to install anything separately. Falls back to PATH lookup in dev
-// if the bundled binary isn't present yet.
-// ---------------------------------------------------------------------------
-const PLATFORM_DIR = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux';
-const BIN_DIR = app.isPackaged
-  ? path.join(process.resourcesPath, 'bin')
-  : path.join(__dirname, 'assets', 'bin', PLATFORM_DIR);
-
-const YTDLP_NAME = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
-const FFMPEG_NAME = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
-
-const BUNDLED_YTDLP = path.join(BIN_DIR, YTDLP_NAME);
-const BUNDLED_FFMPEG = path.join(BIN_DIR, FFMPEG_NAME);
-
-const YTDLP_BIN = fs.existsSync(BUNDLED_YTDLP) ? BUNDLED_YTDLP : 'yt-dlp';
-const FFMPEG_BIN = fs.existsSync(BUNDLED_FFMPEG) ? BUNDLED_FFMPEG : 'ffmpeg';
-
-if (process.platform !== 'win32') {
-  try { fs.chmodSync(YTDLP_BIN, 0o755); } catch {}
-  try { fs.chmodSync(FFMPEG_BIN, 0o755); } catch {}
-}
+const { BinaryManager } = require('./binaryManager');
 
 // ---------------------------------------------------------------------------
 // Paths & persistent storage (plain JSON files — no DB needed, keeps backend simple)
@@ -36,8 +13,8 @@ const SETTINGS_FILE = path.join(USER_DATA, 'settings.json');
 
 const DEFAULT_SETTINGS = {
   outputDir: app.getPath('downloads'),
-  ytdlpPath: YTDLP_BIN,
-  ffmpegPath: FFMPEG_BIN,
+  ytdlpPath: '',  // resolved at startup by binaryManager, see initBinaries()
+  ffmpegPath: '', // resolved at startup by binaryManager, see initBinaries()
   concurrency: 2,
   theme: 'dark',
   embedThumbnail: true,
@@ -48,7 +25,8 @@ const DEFAULT_SETTINGS = {
   closeToTray: true,
   rateLimit: '', // e.g. "5M" for 5MB/s, empty = unlimited
   cookiesFromBrowser: '', // e.g. "chrome", "edge", "firefox" — fixes "Sign in to confirm you're not a bot"
-  cookiesFilePath: '' // path to an exported cookies.txt — more reliable than cookiesFromBrowser on newer Chrome
+  cookiesFilePath: '', // path to an exported cookies.txt — more reliable than cookiesFromBrowser on newer Chrome
+  potProviderEnabled: false // local PO Token provider sidecar (helps with SABR-blocked videos)
 };
 
 function readJSON(file, fallback) {
@@ -64,6 +42,54 @@ function writeJSON(file, data) {
 
 let settings = { ...DEFAULT_SETTINGS, ...readJSON(SETTINGS_FILE, {}) };
 let history = readJSON(HISTORY_FILE, []);
+
+// ---------------------------------------------------------------------------
+// Binary manager — replaces the old "bundled in assets/bin" approach.
+// yt-dlp + ffmpeg are downloaded on first launch into userData/bin and kept
+// up to date from there. See binaryManager.js for the full implementation.
+// ---------------------------------------------------------------------------
+const binaryManager = new BinaryManager(USER_DATA);
+let depsReady = false;
+
+binaryManager.on('progress', (payload) => {
+  mainWindow?.webContents.send('deps:progress', payload);
+});
+
+async function initBinaries() {
+  try {
+    const { ytdlpPath, ffmpegPath, ready } = await binaryManager.ensureBinaries();
+    settings.ytdlpPath = ytdlpPath;
+    settings.ffmpegPath = ffmpegPath;
+    writeJSON(SETTINGS_FILE, settings);
+    depsReady = ready;
+    mainWindow?.webContents.send('deps:ready', { ok: ready });
+  } catch (e) {
+    depsReady = false;
+    mainWindow?.webContents.send('deps:ready', {
+      ok: false,
+      error: `Couldn't download required components. Check your internet connection and retry. (${e.message})`
+    });
+  }
+
+  // Background update check — runs once shortly after startup, then daily.
+  // Silent: only surfaces to the UI if something actually changes.
+  setTimeout(() => backgroundUpdateCheck(), 8000);
+  setInterval(() => backgroundUpdateCheck(), 24 * 60 * 60 * 1000);
+}
+
+async function backgroundUpdateCheck() {
+  try {
+    const result = await binaryManager.checkForUpdates({ silent: true });
+    if (result.ytdlp.updated || result.ffmpeg.updated) {
+      settings.ytdlpPath = binaryManager.ytdlpPath;
+      settings.ffmpegPath = binaryManager.ffmpegPath;
+      writeJSON(SETTINGS_FILE, settings);
+      mainWindow?.webContents.send('deps:auto-updated', result);
+    }
+  } catch {
+    // Silent background check — network hiccups shouldn't bother the user.
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Window
@@ -146,6 +172,9 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   startClipboardWatcher();
+  initBinaries();
+  if (settings.potProviderEnabled) startPotProvider().catch(() => {});
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
     else mainWindow?.show();
@@ -179,6 +208,44 @@ function startClipboardWatcher() {
 }
 
 // ---------------------------------------------------------------------------
+// Dependencies IPC (auto-download / update / manual re-download)
+// ---------------------------------------------------------------------------
+ipcMain.handle('deps:get-status', async () => {
+  const status = await binaryManager.getStatus();
+  return { ...status, ready: depsReady };
+});
+
+ipcMain.handle('deps:check-updates', async () => {
+  try {
+    const result = await binaryManager.checkForUpdates({ silent: false });
+    if (result.ytdlp.updated || result.ffmpeg.updated) {
+      settings.ytdlpPath = binaryManager.ytdlpPath;
+      settings.ffmpegPath = binaryManager.ffmpegPath;
+      writeJSON(SETTINGS_FILE, settings);
+    }
+    return { ok: true, ...result };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('deps:redownload', async () => {
+  try {
+    const status = await binaryManager.redownloadAll();
+    settings.ytdlpPath = binaryManager.ytdlpPath;
+    settings.ffmpegPath = binaryManager.ffmpegPath;
+    writeJSON(SETTINGS_FILE, settings);
+    depsReady = true;
+    return { ok: true, ...status };
+  } catch (e) {
+    return {
+      ok: false,
+      error: `Couldn't download required components. Check your internet connection and retry. (${e.message})`
+    };
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Helpers to run yt-dlp
 // ---------------------------------------------------------------------------
 function runYtDlpJSON(args) {
@@ -194,6 +261,45 @@ function runYtDlpJSON(args) {
       resolve(stdout);
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// SABR / PO Token fallback — some clients (mainly "web") get served
+// SABR-only formats with no direct URL, which yt-dlp reports via stderr
+// ("forcing SABR streaming...") rather than a clean error. Instead of
+// surfacing that to the user, we retry the same request against a chain of
+// alternate player clients until one works.
+// ---------------------------------------------------------------------------
+const CLIENT_CHAIN = ['tv', 'mweb', 'ios', 'web_creator'];
+const SABR_ERROR_RE = /forcing sabr streaming|sabr[- ]only|missing url in format|requested format is not available|unable to extract yt initial data/i;
+
+function buildExtractorArgs(client) {
+  const args = ['--extractor-args', `youtube:player_client=${client}`];
+  // web_creator can use a PO token when our local sidecar provider is up —
+  // wire it in via the youtubepot-bgutilhttp extractor plugin's own args.
+  // NOTE: if bgutil-ytdlp-pot-provider changes its expected extractor-args
+  // key in a future release, update this line to match its README.
+  if (client === 'web_creator' && settings.potProviderEnabled && potProviderIsRunning()) {
+    args.push('--extractor-args', `youtubepot-bgutilhttp:base_url=http://127.0.0.1:${POT_PORT}`);
+  }
+  return args;
+}
+
+async function runYtDlpJSONWithFallback(baseArgs) {
+  let lastErr;
+  for (let i = 0; i < CLIENT_CHAIN.length; i++) {
+    const client = CLIENT_CHAIN[i];
+    try {
+      return await runYtDlpJSON([...buildExtractorArgs(client), ...baseArgs]);
+    } catch (e) {
+      lastErr = e;
+      const isLastClient = i === CLIENT_CHAIN.length - 1;
+      // Only burn through the whole chain for SABR-shaped failures — a bad
+      // URL or a private video should fail fast instead of retrying 4x.
+      if (!SABR_ERROR_RE.test(e.message) || isLastClient) throw e;
+    }
+  }
+  throw lastErr;
 }
 
 ipcMain.handle('ytdlp:check', async () => {
@@ -227,8 +333,10 @@ ipcMain.handle('ytdlp:fetch-info', async (_evt, url) => {
       };
     }
 
-    // Step 2: full extraction for a single video (real formats list)
-    const fullOut = await runYtDlpJSON(['-J', '--no-playlist', '--no-warnings', url]);
+    // Step 2: full extraction for a single video (real formats list) — this
+    // is the step most likely to hit a SABR-only response, so it goes
+    // through the client fallback chain.
+    const fullOut = await runYtDlpJSONWithFallback(['-J', '--no-playlist', '--no-warnings', url]);
     const info = JSON.parse(fullOut);
 
     const formats = (info.formats || []).filter((f) => f.vcodec && f.vcodec !== 'none');
@@ -442,7 +550,88 @@ ipcMain.handle('auth:youtube-signout', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Download engine — one child process per queued job, tracked by jobId
+// Optional local PO Token provider sidecar (bgutil-ytdlp-pot-provider) —
+// installed on first enable from npm, then run as a plain Node child
+// process using Electron's own bundled Node runtime (no separate Node.js
+// install required on the user's machine).
+// ---------------------------------------------------------------------------
+const POT_PORT = 4416;
+const POT_DIR = path.join(USER_DATA, 'pot-provider');
+let potProcess = null;
+
+async function fetchNpmTarballUrl(pkgName) {
+  const meta = await binaryManager.httpsGetJSON(`https://registry.npmjs.org/${pkgName}/latest`);
+  if (!meta.dist || !meta.dist.tarball) throw new Error(`No tarball found for ${pkgName}`);
+  return meta.dist.tarball;
+}
+
+async function ensurePotProviderInstalled() {
+  const existing = binaryManager.findFileRecursive(POT_DIR, 'main.js')
+    || binaryManager.findFileRecursive(POT_DIR, 'server.js');
+  if (existing) return existing;
+
+  fs.mkdirSync(POT_DIR, { recursive: true });
+  const tarballUrl = await fetchNpmTarballUrl('bgutil-ytdlp-pot-provider');
+  const tgzPath = path.join(POT_DIR, 'package.tgz');
+  await binaryManager.downloadToFile(tarballUrl, tgzPath, () => {});
+  // npm tarballs are plain gzipped tar files — `tar` handles this natively
+  // on macOS/Linux, and on Windows 10+ the built-in tar.exe (bsdtar) does too.
+  await binaryManager.runCmd('tar', ['-xzf', tgzPath, '-C', POT_DIR]);
+  fs.unlinkSync(tgzPath);
+
+  // NOTE: npm package internal layout can change between releases — if the
+  // provider's entry file isn't named main.js/server.js/index.js anymore,
+  // update this lookup (or hardcode the path from its package.json "main").
+  const entry = binaryManager.findFileRecursive(POT_DIR, 'main.js')
+    || binaryManager.findFileRecursive(POT_DIR, 'server.js')
+    || binaryManager.findFileRecursive(POT_DIR, 'index.js');
+  if (!entry) throw new Error('Could not locate the PO Token provider entry script after install');
+  return entry;
+}
+
+async function startPotProvider() {
+  if (potProcess) return { running: true };
+  const entry = await ensurePotProviderInstalled();
+  potProcess = spawn(process.execPath, [entry], {
+    env: { ...process.env, PORT: String(POT_PORT), ELECTRON_RUN_AS_NODE: '1' },
+    windowsHide: true
+  });
+  potProcess.on('exit', () => { potProcess = null; });
+  potProcess.on('error', () => { potProcess = null; });
+  // Give it a moment to boot before yt-dlp starts relying on it.
+  await new Promise((r) => setTimeout(r, 1500));
+  return { running: !!potProcess };
+}
+
+function stopPotProvider() {
+  if (potProcess) { potProcess.kill(); potProcess = null; }
+}
+
+function potProviderIsRunning() {
+  return !!potProcess;
+}
+
+ipcMain.handle('pot:toggle', async (_evt, enabled) => {
+  settings.potProviderEnabled = enabled;
+  writeJSON(SETTINGS_FILE, settings);
+  try {
+    if (enabled) return await startPotProvider();
+    stopPotProvider();
+    return { running: false };
+  } catch (e) {
+    settings.potProviderEnabled = false;
+    writeJSON(SETTINGS_FILE, settings);
+    return { running: false, error: e.message };
+  }
+});
+
+ipcMain.handle('pot:status', () => ({ running: potProviderIsRunning(), enabled: settings.potProviderEnabled }));
+
+// ---------------------------------------------------------------------------
+// Download engine — one child process per queued job, tracked by jobId.
+// Automatically retries through CLIENT_CHAIN on SABR-shaped failures before
+// giving up; a final failure is reported as retryable so the queue item can
+// be retried individually without disturbing the rest of the queue.
 // ---------------------------------------------------------------------------
 const activeJobs = new Map(); // jobId -> ChildProcess
 
@@ -514,95 +703,123 @@ const MERGE_RE = /\[Merger\]|Merging formats/;
 const FINAL_PATH_RE = /^NEXGRAB_FINAL_PATH::(.+)$/;
 
 ipcMain.handle('download:start', async (_evt, job) => {
-  const args = buildArgs(job);
-  const proc = spawn(settings.ytdlpPath, args, { cwd: job.outputDir });
-  activeJobs.set(job.jobId, { proc, destination: null });
-
   const send = (channel, payload) => mainWindow?.webContents.send(channel, { jobId: job.jobId, ...payload });
+  let clientIdx = 0;
 
-  let destination = null;
-  let stdoutBuffer = '';
+  function attempt() {
+    const client = CLIENT_CHAIN[clientIdx];
+    const args = [...buildExtractorArgs(client), ...buildArgs(job)];
+    const proc = spawn(settings.ytdlpPath, args, { cwd: job.outputDir });
+    activeJobs.set(job.jobId, { proc, destination: null });
 
-  function processLine(line) {
-    if (!line.trim()) return;
+    let destination = null;
+    let stdoutBuffer = '';
+    let sabrSeen = false;
+    let stderrBuf = '';
 
-    const finalPath = line.match(FINAL_PATH_RE);
-    if (finalPath) {
-      destination = finalPath[1].trim();
-      activeJobs.get(job.jobId).destination = destination;
-      return;
+    function processLine(line) {
+      if (!line.trim()) return;
+
+      const finalPath = line.match(FINAL_PATH_RE);
+      if (finalPath) {
+        destination = finalPath[1].trim();
+        activeJobs.get(job.jobId).destination = destination;
+        return;
+      }
+
+      const dest = line.match(DEST_RE);
+      if (dest) { destination = dest[1]; activeJobs.get(job.jobId).destination = destination; }
+
+      if (MERGE_RE.test(line)) {
+        send('download:progress', { status: 'merging', percent: 99 });
+        return;
+      }
+      if (ALREADY_RE.test(line)) {
+        const already = line.match(ALREADY_RE);
+        if (already) { destination = already[1]; activeJobs.get(job.jobId).destination = destination; }
+        send('download:progress', { status: 'exists', percent: 100, path: destination });
+        return;
+      }
+
+      const m = line.match(PROGRESS_RE);
+      if (m) {
+        send('download:progress', {
+          status: 'downloading',
+          percent: parseFloat(m[1]),
+          size: m[2],
+          speed: m[3],
+          eta: m[4]
+        });
+      }
     }
 
-    const dest = line.match(DEST_RE);
-    if (dest) { destination = dest[1]; activeJobs.get(job.jobId).destination = destination; }
+    proc.stdout.on('data', (chunk) => {
+      // Buffer partial lines across chunk boundaries — a single line (especially
+      // the long final-path marker) can otherwise split across two 'data'
+      // events and silently fail to match any regex.
+      stdoutBuffer += chunk.toString();
+      const lines = stdoutBuffer.split(/\r\n|\r|\n/);
+      stdoutBuffer = lines.pop();
+      lines.forEach(processLine);
+    });
 
-    if (MERGE_RE.test(line)) {
-      send('download:progress', { status: 'merging', percent: 99 });
-      return;
-    }
-    if (ALREADY_RE.test(line)) {
-      const already = line.match(ALREADY_RE);
-      if (already) { destination = already[1]; activeJobs.get(job.jobId).destination = destination; }
-      send('download:progress', { status: 'exists', percent: 100, path: destination });
-      return;
-    }
+    proc.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      stderrBuf += text;
+      if (SABR_ERROR_RE.test(text)) sabrSeen = true;
+    });
 
-    const m = line.match(PROGRESS_RE);
-    if (m) {
+    proc.on('close', (code) => {
+      if (stdoutBuffer.trim()) { processLine(stdoutBuffer); stdoutBuffer = ''; }
+      activeJobs.delete(job.jobId);
+
+      if (code === 0) {
+        const entry = {
+          id: job.jobId,
+          title: job.title,
+          url: job.url,
+          mode: job.mode,
+          quality: job.mode === 'audio' ? `${job.audioFormat.toUpperCase()} ${job.audioQuality}` : `${job.height || 'best'}p`,
+          path: destination || job.outputDir,
+          date: new Date().toISOString()
+        };
+        history.unshift(entry);
+        history = history.slice(0, 300);
+        writeJSON(HISTORY_FILE, history);
+
+        send('download:progress', { status: 'done', percent: 100, path: destination });
+        if (Notification.isSupported()) {
+          new Notification({ title: 'NexGrab', body: `Finished: ${job.title}` }).show();
+        }
+        return;
+      }
+
+      // SABR-shaped failure and clients left to try — silently retry with
+      // the next one instead of surfacing an error to the user.
+      if (sabrSeen && clientIdx < CLIENT_CHAIN.length - 1) {
+        clientIdx++;
+        send('download:progress', {
+          status: 'retrying',
+          message: `Blocked — retrying with the ${CLIENT_CHAIN[clientIdx]} client…`
+        });
+        attempt();
+        return;
+      }
+
       send('download:progress', {
-        status: 'downloading',
-        percent: parseFloat(m[1]),
-        size: m[2],
-        speed: m[3],
-        eta: m[4]
+        status: 'error',
+        error: stderrBuf.slice(-500) || `yt-dlp exited with code ${code}`,
+        retryable: true
       });
-    }
+    });
+
+    proc.on('error', (err) => {
+      activeJobs.delete(job.jobId);
+      send('download:progress', { status: 'error', error: err.message, retryable: true });
+    });
   }
 
-  proc.stdout.on('data', (chunk) => {
-    // Buffer partial lines across chunk boundaries — a single line (especially
-    // the long final-path marker) can otherwise split across two 'data'
-    // events and silently fail to match any regex.
-    stdoutBuffer += chunk.toString();
-    const lines = stdoutBuffer.split(/\r\n|\r|\n/);
-    stdoutBuffer = lines.pop();
-    lines.forEach(processLine);
-  });
-
-  let stderrBuf = '';
-  proc.stderr.on('data', (chunk) => { stderrBuf += chunk.toString(); });
-
-  proc.on('close', (code) => {
-    if (stdoutBuffer.trim()) { processLine(stdoutBuffer); stdoutBuffer = ''; }
-    activeJobs.delete(job.jobId);
-    if (code === 0) {
-      const entry = {
-        id: job.jobId,
-        title: job.title,
-        url: job.url,
-        mode: job.mode,
-        quality: job.mode === 'audio' ? `${job.audioFormat.toUpperCase()} ${job.audioQuality}` : `${job.height || 'best'}p`,
-        path: destination || job.outputDir,
-        date: new Date().toISOString()
-      };
-      history.unshift(entry);
-      history = history.slice(0, 300);
-      writeJSON(HISTORY_FILE, history);
-
-      send('download:progress', { status: 'done', percent: 100, path: destination });
-      if (Notification.isSupported()) {
-        new Notification({ title: 'NexGrab', body: `Finished: ${job.title}` }).show();
-      }
-    } else {
-      send('download:progress', { status: 'error', error: stderrBuf.slice(-500) || `yt-dlp exited with code ${code}` });
-    }
-  });
-
-  proc.on('error', (err) => {
-    activeJobs.delete(job.jobId);
-    send('download:progress', { status: 'error', error: err.message });
-  });
-
+  attempt();
   return { started: true };
 });
 

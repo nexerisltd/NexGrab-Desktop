@@ -1,7 +1,7 @@
 {
   "name": "nexgrab",
   "productName": "NexGrab",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "NexGrab — a beautifully simple, ridiculously capable YouTube video & audio downloader powered by yt-dlp.",
   "author": "NexApp",
   "main": "main.js",
@@ -22,9 +22,15 @@
     "asar": true,
     "compression": "maximum",
     "icon": "assets/icon.png",
+    "publish": {
+      "provider": "github",
+      "owner": "nexerisltd",
+      "repo": "NexGrab-Desktop"
+    },
     "files": [
       "main.js",
       "preload.js",
+      "binaryManager.js",
       "src/**/*",
       "assets/icon.*"
     ],
@@ -32,13 +38,7 @@
       "target": "nsis",
       "icon": "assets/icon.ico",
       "forceCodeSigning": false,
-      "artifactName": "NexGrab-Setup-${version}-win64.exe",
-      "extraResources": [
-        {
-          "from": "assets/bin/win",
-          "to": "bin"
-        }
-      ]
+      "artifactName": "NexGrab-Setup-${version}-win64.exe"
     },
     "nsis": {
       "oneClick": false,
@@ -55,22 +55,12 @@
       "target": "dmg",
       "icon": "assets/icon.icns",
       "category": "public.app-category.utilities",
-      "extraResources": [
-        {
-          "from": "assets/bin/mac",
-          "to": "bin"
-        }
-      ]
+      "artifactName": "NexGrab-Setup-${version}-mac.${ext}"
     },
     "linux": {
       "target": "AppImage",
       "icon": "assets/icon.png",
-      "extraResources": [
-        {
-          "from": "assets/bin/linux",
-          "to": "bin"
-        }
-      ]
+      "artifactName": "NexGrab-Setup-${version}-linux.${ext}"
     }
   }
 }

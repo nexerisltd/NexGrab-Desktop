@@ -1,0 +1,85 @@
+name: Release
+
+# Push a tag like v.2.1.0 (or v2.1.0 — the pattern below matches anything
+# starting with "v") to trigger this. It:
+#   1. Builds the Windows, macOS, and Linux installers in parallel, each on
+#      its native runner (electron-builder can't cross-compile a working
+#      NSIS/dmg/AppImage from a single OS, so this is the only reliable way
+#      to get all three from one push).
+#   2. Publishes all three as assets on a GitHub Release for that tag.
+#   3. Rewrites the download links (and version number) in README.md and
+#      commits that back to main automatically.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            args: --win
+          - os: macos-latest
+            args: --mac
+          - os: ubuntu-latest
+            args: --linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      # electron-builder's own --publish flag creates the GitHub Release
+      # (if it doesn't exist yet for this tag) and uploads that platform's
+      # installer to it. Running this from 3 parallel jobs against the same
+      # tag is safe — electron-builder appends assets to the existing draft
+      # release rather than overwriting it.
+      - name: Build & publish (${{ matrix.os }})
+        run: npx electron-builder ${{ matrix.args }} --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-readme:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Fetch this release's assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          gh api "repos/${{ github.repository }}/releases/tags/$TAG" --jq '.assets' > /tmp/assets.json
+
+      - name: Update README.md download links
+        run: node scripts/update-readme.js "$TAG" /tmp/assets.json
+
+      - name: Commit & push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --cached --quiet; then
+            echo "README already up to date — nothing to commit"
+          else
+            git commit -m "docs: update download links for ${TAG} [skip ci]"
+            git push origin HEAD:main
+          fi

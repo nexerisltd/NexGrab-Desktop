@@ -25,5 +25,17 @@ contextBridge.exposeInMainWorld('nex', {
   cancelDownload: (jobId) => ipcRenderer.invoke('download:cancel', jobId),
 
   onProgress: (cb) => ipcRenderer.on('download:progress', (_e, data) => cb(data)),
-  onClipboardUrl: (cb) => ipcRenderer.on('clipboard:youtube-url', (_e, url) => cb(url))
+  onClipboardUrl: (cb) => ipcRenderer.on('clipboard:youtube-url', (_e, url) => cb(url)),
+
+  // --- Dependencies (auto-downloaded yt-dlp / ffmpeg) ---
+  getDepsStatus: () => ipcRenderer.invoke('deps:get-status'),
+  checkDepsUpdates: () => ipcRenderer.invoke('deps:check-updates'),
+  redownloadDeps: () => ipcRenderer.invoke('deps:redownload'),
+  onDepsProgress: (cb) => ipcRenderer.on('deps:progress', (_e, data) => cb(data)),
+  onDepsReady: (cb) => ipcRenderer.on('deps:ready', (_e, data) => cb(data)),
+  onDepsAutoUpdated: (cb) => ipcRenderer.on('deps:auto-updated', (_e, data) => cb(data)),
+
+  // --- Optional local PO Token provider sidecar ---
+  togglePotProvider: (enabled) => ipcRenderer.invoke('pot:toggle', enabled),
+  getPotStatus: () => ipcRenderer.invoke('pot:status')
 });
