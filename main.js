@@ -57,7 +57,15 @@ binaryManager.on('progress', (payload) => {
 
 async function initBinaries() {
   try {
-    const { ytdlpPath, ffmpegPath, ready } = await binaryManager.ensureBinaries();
+    // Absolute last-resort safety net: no matter what goes wrong inside
+    // ensureBinaries() — a bug we didn't anticipate, a genuinely stuck OS
+    // call, a locked file from another process — the setup overlay must
+    // never be able to spin forever with no way out. If nothing resolves
+    // within 6 minutes, force a clear error + retry instead.
+    const timeoutGuard = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Setup timed out after 6 minutes')), 6 * 60 * 1000);
+    });
+    const { ytdlpPath, ffmpegPath, ready } = await Promise.race([binaryManager.ensureBinaries(), timeoutGuard]);
     settings.ytdlpPath = ytdlpPath;
     settings.ffmpegPath = ffmpegPath;
     writeJSON(SETTINGS_FILE, settings);
@@ -65,6 +73,7 @@ async function initBinaries() {
     mainWindow?.webContents.send('deps:ready', { ok: ready });
   } catch (e) {
     depsReady = false;
+    console.error('initBinaries failed:', e);
     mainWindow?.webContents.send('deps:ready', {
       ok: false,
       error: `Couldn't download required components. Check your internet connection and retry. (${e.message})`
@@ -168,27 +177,52 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('com.nexapp.nexgrab');
 }
 
-app.whenReady().then(() => {
-  createWindow();
-  createTray();
-  startClipboardWatcher();
-  initBinaries();
-  if (settings.potProviderEnabled) startPotProvider().catch(() => {});
+// ---------------------------------------------------------------------------
+// Single-instance lock — critical with closeToTray enabled. Without this,
+// closing the window via the X button (which hides to tray rather than
+// quitting) followed by launching the .exe again spins up a SECOND, fully
+// independent process. Both processes then race to download/extract into
+// the exact same userData/bin folder, and on Windows a file that's open in
+// one process can't be written by another — leading to exactly the kind of
+// permanent hang seen with the dependency setup overlay. Only ONE instance
+// is now allowed to run at all; launching a second one just focuses the
+// first instance's window instead of starting a competing process.
+// ---------------------------------------------------------------------------
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-    else mainWindow?.show();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
   });
-});
 
-app.on('before-quit', () => { isQuitting = true; });
+  app.whenReady().then(() => {
+    createWindow();
+    createTray();
+    startClipboardWatcher();
+    initBinaries();
+    if (settings.potProviderEnabled) startPotProvider().catch(() => {});
 
-app.on('window-all-closed', () => {
-  // With close-to-tray enabled the window is hidden rather than destroyed,
-  // so this normally only fires on a real quit or on platforms/settings
-  // where close-to-tray is off.
-  if (process.platform !== 'darwin' && !settings.closeToTray) app.quit();
-});
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      else mainWindow?.show();
+    });
+  });
+
+  app.on('before-quit', () => { isQuitting = true; });
+
+  app.on('window-all-closed', () => {
+    // With close-to-tray enabled the window is hidden rather than destroyed,
+    // so this normally only fires on a real quit or on platforms/settings
+    // where close-to-tray is off.
+    if (process.platform !== 'darwin' && !settings.closeToTray) app.quit();
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Clipboard watcher — auto-detects a fresh YouTube link copied by the user
