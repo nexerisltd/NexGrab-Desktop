@@ -18,7 +18,35 @@ permissions:
   contents: write
 
 jobs:
+  # Creates the GitHub Release for this tag BEFORE any platform build starts.
+  # Without this, all 3 matrix jobs below race to create the SAME release the
+  # first time a brand-new tag is pushed: each independently asks "does a
+  # release for this tag exist yet?", all three get "no" at once, all three
+  # try to create it, and GitHub's unique tag_name constraint lets only one
+  # win — the other two fail with 422 "already_exists" and the whole run
+  # goes red. Pre-creating it here means every platform job just uploads
+  # assets to an already-existing release, which electron-builder does
+  # handle safely from multiple parallel jobs.
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create release if it doesn't exist yet
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — nothing to do"
+          else
+            gh release create "$TAG" --repo "${{ github.repository }}" \
+              --title "$TAG" --generate-notes
+          fi
+
   build:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
