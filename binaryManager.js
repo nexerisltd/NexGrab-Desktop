@@ -483,6 +483,26 @@ class BinaryManager extends EventEmitter {
     });
   }
 
+  /**
+   * GitHub's API returns plain HTTP 403 for rate-limiting (not 429), which
+   * otherwise looks like a generic, unhelpful failure. When the response
+   * headers show this is specifically a rate limit, surface the actual
+   * reset time instead of a vague "check your connection" message.
+   */
+  describeHttpFailure(res, url, body) {
+    const isGitHubApi = /^https:\/\/api\.github\.com\//.test(url);
+    const remaining = res.headers['x-ratelimit-remaining'];
+    const resetHeader = res.headers['x-ratelimit-reset'];
+
+    if (isGitHubApi && res.statusCode === 403 && remaining === '0' && resetHeader) {
+      const resetDate = new Date(parseInt(resetHeader, 10) * 1000);
+      const minutesLeft = Math.max(1, Math.ceil((resetDate.getTime() - Date.now()) / 60000));
+      return `GitHub's API rate limit was hit while checking for updates. This resets at ${resetDate.toLocaleTimeString()} (about ${minutesLeft} min from now) — please try again after that.`;
+    }
+
+    return `Request failed: HTTP ${res.statusCode} for ${url}${body ? ` — ${body.slice(0, 200)}` : ''}`;
+  }
+
   httpsGetJSON(url, redirects = 0) {
     return new Promise((resolve, reject) => {
       if (redirects > 5) return reject(new Error('Too many redirects'));
@@ -497,7 +517,7 @@ class BinaryManager extends EventEmitter {
         res.on('data', (chunk) => { body += chunk; });
         res.on('end', () => {
           if (res.statusCode !== 200) {
-            return reject(new Error(`Request failed: HTTP ${res.statusCode} for ${url}`));
+            return reject(new Error(this.describeHttpFailure(res, url, body)));
           }
           try { resolve(JSON.parse(body)); }
           catch (e) { reject(new Error(`Could not parse JSON response from ${url}: ${e.message}`)); }
