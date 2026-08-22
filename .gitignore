@@ -12,3 +12,4 @@ yarn-error.log*
 electron-builder-cache/
 assets/Screenshot*.png
 assets/Home*.png
+dist/ 
