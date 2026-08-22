@@ -12,19 +12,19 @@ Grab the latest build for your platform from the [Releases page](https://github.
 
 ### Windows
 <!-- DOWNLOAD_WIN_START -->
-[![Download NexGrab for Windows](https://img.shields.io/badge/Download-NexGrab%20for%20Windows-0ea5e9?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/nexerisltd/NexGrab-Desktop/releases/download/v.2.1.0/NexGrab-Setup-2.1.0-win64.exe)
+[![Download NexGrab for Windows](https://img.shields.io/badge/Download-NexGrab%20for%20Windows-0ea5e9?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/nexerisltd/NexGrab-Desktop/releases/download/v2.1.0/NexGrab-Setup-2.1.0-win64.exe)
 
 Download and run **NexGrab Setup 2.1.0 for Windows (64-bit)**.
 <!-- DOWNLOAD_WIN_END -->
 
 ### macOS
 <!-- DOWNLOAD_MAC_START -->
-[![Download NexGrab for macOS](https://img.shields.io/badge/Download-NexGrab%20for%20macOS-0ea5e9?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/nexerisltd/NexGrab-Desktop/releases/latest)
+[![Download NexGrab for macOS](https://img.shields.io/badge/Download-NexGrab%20for%20macOS-0ea5e9?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/nexerisltd/NexGrab-Desktop/releases/download/v2.1.0/NexGrab-Setup-2.1.0-mac.dmg)
 <!-- DOWNLOAD_MAC_END -->
 
 ### Linux
 <!-- DOWNLOAD_LINUX_START -->
-[![Download NexGrab for Linux](https://img.shields.io/badge/Download-NexGrab%20for%20Linux-0ea5e9?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/nexerisltd/NexGrab-Desktop/releases/latest)
+[![Download NexGrab for Linux](https://img.shields.io/badge/Download-NexGrab%20for%20Linux-0ea5e9?style=for-the-badge&logo=linux&logoColor=white)](https://github.com/nexerisltd/NexGrab-Desktop/releases/download/v2.1.0/NexGrab-Setup-2.1.0-linux.AppImage)
 <!-- DOWNLOAD_LINUX_END -->
 
 ## Highlights
