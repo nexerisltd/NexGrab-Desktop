@@ -42,6 +42,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # electron-builder names/publishes the GitHub Release from
+      # package.json's "version" field — NOT from the git tag that
+      # triggered this run. Left alone, every tag (v2.1.0, v.0.0.1-test,
+      # v.0.0.2-test, ...) keeps publishing to the same "v2.1.0" release
+      # and overwriting its assets, since package.json's version never
+      # changes between pushes. Strip the tag down to a bare semver and
+      # write it into package.json first so the release electron-builder
+      # creates actually matches the tag that was pushed.
+      - name: Sync package.json version to the pushed tag
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          VERSION="${VERSION#.}"
+          echo "Tag $TAG -> version $VERSION"
+          npm pkg set version="$VERSION"
+
       # electron-builder's own --publish flag creates the GitHub Release
       # (if it doesn't exist yet for this tag) and uploads that platform's
       # installer to it. Running this from 3 parallel jobs against the same

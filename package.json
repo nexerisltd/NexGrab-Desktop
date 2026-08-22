@@ -22,9 +22,16 @@
     "asar": true,
     "compression": "maximum",
     "icon": "assets/icon.png",
+    "publish": {
+      "provider": "github",
+      "owner": "nexerisltd",
+      "repo": "NexGrab-Desktop",
+      "releaseType": "release"
+    },
     "files": [
       "main.js",
       "preload.js",
+      "binaryManager.js",
       "src/**/*",
       "assets/icon.*"
     ],
