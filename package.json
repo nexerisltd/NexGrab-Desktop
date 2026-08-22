@@ -25,7 +25,8 @@
     "publish": {
       "provider": "github",
       "owner": "nexerisltd",
-      "repo": "NexGrab-Desktop"
+      "repo": "NexGrab-Desktop",
+      "releaseType": "release"
     },
     "files": [
       "main.js",

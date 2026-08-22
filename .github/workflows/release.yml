@@ -45,8 +45,10 @@ jobs:
       # electron-builder's own --publish flag creates the GitHub Release
       # (if it doesn't exist yet for this tag) and uploads that platform's
       # installer to it. Running this from 3 parallel jobs against the same
-      # tag is safe — electron-builder appends assets to the existing draft
-      # release rather than overwriting it.
+      # tag is safe — electron-builder appends assets to the existing
+      # release rather than overwriting it. releaseType: "release" in
+      # package.json's publish config (not the default "draft") means it
+      # publishes immediately instead of leaving it for manual approval.
       - name: Build & publish (${{ matrix.os }})
         run: npx electron-builder ${{ matrix.args }} --publish always
         env:
@@ -61,13 +63,22 @@ jobs:
         with:
           ref: main
 
-      - name: Fetch this release's assets
+      - name: Fetch the release electron-builder just published
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
-          gh api "repos/${{ github.repository }}/releases/tags/$TAG" --jq '.assets' > /tmp/assets.json
+          # electron-builder computes its own release tag from package.json's
+          # "version" field — not necessarily the exact git tag that
+          # triggered this run — so instead of assuming the two match
+          # (they should, but this is more robust either way), just grab
+          # whichever release was published most recently.
+          gh api "repos/${{ github.repository }}/releases" --jq '.[0]' > /tmp/release.json
+          node -e "
+            const fs = require('fs');
+            const release = JSON.parse(fs.readFileSync('/tmp/release.json', 'utf-8'));
+            fs.writeFileSync('/tmp/assets.json', JSON.stringify(release.assets));
+            fs.appendFileSync(process.env.GITHUB_ENV, 'TAG=' + release.tag_name + '\n');
+          "
 
       - name: Update README.md download links
         run: node scripts/update-readme.js "$TAG" /tmp/assets.json
