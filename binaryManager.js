@@ -22,11 +22,18 @@
  *              macOS       -> https://evermeet.cx/ffmpeg (official static
  *              builds JSON API, includes a sha256 for every release)
  *
- * Everything here is intentionally dependency-free (no extra npm packages)
- * — extraction is delegated to OS tools that are already present:
- *   - Windows -> PowerShell's Expand-Archive (zip)
- *   - macOS   -> unzip (zip)
- *   - Linux   -> tar (tar.xz)
+ * Everything here is intentionally dependency-free (no extra npm packages).
+ * Zip extraction (yt-dlp needs none; ffmpeg on Windows/macOS ships as .zip)
+ * is done with a small built-in unzipSync() rather than shelling out to
+ * PowerShell's Expand-Archive or macOS's unzip — spawning an external
+ * process for this turned out to hang indefinitely on some machines
+ * (most likely real-time antivirus scanning stalling the child process),
+ * with no way to recover short of force-quitting the app. Pure-JS
+ * extraction removes that whole failure class. Linux's ffmpeg build is a
+ * .tar.xz, which we still extract via the system `tar` (implementing an
+ * XZ/LZMA decompressor from scratch isn't worth the risk) — but that call,
+ * like every other spawned command in this file, now has a hard timeout
+ * so a hang there fails loudly instead of freezing the app forever.
  * ---------------------------------------------------------------------------
  */
 
@@ -34,9 +41,11 @@ const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const { EventEmitter } = require('events');
 const { spawn, execFile } = require('child_process');
 
+const CMD_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes — generous, but finite
 const YTDLP_RELEASE_API = 'https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest';
 const FFMPEG_RELEASE_API = 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest';
 const FFMPEG_MAC_API = 'https://evermeet.cx/ffmpeg/info/ffmpeg/release';
@@ -280,10 +289,19 @@ class BinaryManager extends EventEmitter {
         }
       }
 
-      this.emitProgress('ffmpeg', 'extracting', {});
-      await this.runCmd('unzip', ['-o', tmpZip, '-d', this.binDir]);
-      fs.unlinkSync(tmpZip);
+      this.emitProgress('ffmpeg', 'extracting', { percent: 0 });
+      const macExtractDir = path.join(this.binDir, '_ffmpeg_extract_mac');
+      fs.rmSync(macExtractDir, { recursive: true, force: true });
+      fs.mkdirSync(macExtractDir, { recursive: true });
+      this.unzipSync(tmpZip, macExtractDir, (percent) => this.emitProgress('ffmpeg', 'extracting', { percent }));
+
+      const foundMac = this.findFileRecursive(macExtractDir, 'ffmpeg');
+      if (!foundMac) throw new Error('ffmpeg binary not found inside the downloaded archive');
+      fs.copyFileSync(foundMac, this.ffmpegPath);
       fs.chmodSync(this.ffmpegPath, 0o755);
+
+      fs.unlinkSync(tmpZip);
+      fs.rmSync(macExtractDir, { recursive: true, force: true });
 
       const manifest = this.readManifest();
       manifest.ffmpeg = { version: meta.buildId, buildId: meta.buildId, downloadedAt: new Date().toISOString() };
@@ -316,17 +334,19 @@ class BinaryManager extends EventEmitter {
       }
     }
 
-    this.emitProgress('ffmpeg', 'extracting', {});
+    this.emitProgress('ffmpeg', 'extracting', { percent: 0 });
     const extractDir = path.join(this.binDir, '_ffmpeg_extract');
     fs.rmSync(extractDir, { recursive: true, force: true });
     fs.mkdirSync(extractDir, { recursive: true });
 
     if (this.platform === 'win32') {
-      await this.runCmd('powershell', [
-        '-NoProfile', '-Command',
-        `Expand-Archive -Path "${tmpArchive}" -DestinationPath "${extractDir}" -Force`
-      ]);
+      this.unzipSync(tmpArchive, extractDir, (percent) => this.emitProgress('ffmpeg', 'extracting', { percent }));
     } else {
+      // Linux ships as .tar.xz — no pure-JS XZ decompressor here, so this
+      // one still shells out to the system `tar` (present on virtually
+      // every distro). It's timeout-guarded like every other spawned
+      // command in this file, so a hang here fails loudly instead of
+      // freezing the app.
       await this.runCmd('tar', ['-xJf', tmpArchive, '-C', extractDir]);
     }
 
@@ -366,12 +386,90 @@ class BinaryManager extends EventEmitter {
     return new Promise((resolve, reject) => {
       const proc = spawn(cmd, args, { windowsHide: true });
       let stderr = '';
+      let settled = false;
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        proc.kill();
+        reject(new Error(`${cmd} timed out after ${CMD_TIMEOUT_MS / 1000}s (possibly stuck behind antivirus scanning) — try again, or check your security software`));
+      }, CMD_TIMEOUT_MS);
+
       proc.stderr?.on('data', (d) => { stderr += d.toString(); });
-      proc.on('error', reject);
+      proc.on('error', (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      });
       proc.on('close', (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         if (code === 0) resolve();
         else reject(new Error(`${cmd} exited with code ${code}: ${stderr.slice(-300)}`));
       });
+    });
+  }
+
+  /**
+   * Minimal, dependency-free ZIP extractor. Supports the two compression
+   * methods every real-world zip we deal with uses — 0 (stored) and 8
+   * (deflate) — which covers both BtbN/FFmpeg-Builds' Windows zips and
+   * evermeet.cx's macOS zips. Does NOT support Zip64, encryption, or
+   * multi-part archives — none of our known sources use those.
+   */
+  unzipSync(zipPath, destDir, onProgress) {
+    const buf = fs.readFileSync(zipPath);
+
+    const EOCD_SIG = 0x06054b50;
+    const searchStart = Math.max(0, buf.length - 22 - 65535);
+    let eocdOffset = -1;
+    for (let i = buf.length - 22; i >= searchStart; i--) {
+      if (buf.readUInt32LE(i) === EOCD_SIG) { eocdOffset = i; break; }
+    }
+    if (eocdOffset === -1) throw new Error('Not a valid zip file (end-of-central-directory record not found)');
+
+    const totalEntries = buf.readUInt16LE(eocdOffset + 10);
+    const centralDirOffset = buf.readUInt32LE(eocdOffset + 16);
+
+    const entries = [];
+    let pos = centralDirOffset;
+    for (let i = 0; i < totalEntries; i++) {
+      if (buf.readUInt32LE(pos) !== 0x02014b50) throw new Error('Corrupt zip central directory');
+      const method = buf.readUInt16LE(pos + 10);
+      const compressedSize = buf.readUInt32LE(pos + 20);
+      const nameLen = buf.readUInt16LE(pos + 28);
+      const extraLen = buf.readUInt16LE(pos + 30);
+      const commentLen = buf.readUInt16LE(pos + 32);
+      const localHeaderOffset = buf.readUInt32LE(pos + 42);
+      const name = buf.toString('utf8', pos + 46, pos + 46 + nameLen);
+      entries.push({ name, method, compressedSize, localHeaderOffset });
+      pos += 46 + nameLen + extraLen + commentLen;
+    }
+
+    entries.forEach((entry, idx) => {
+      const outPath = path.join(destDir, entry.name);
+      if (entry.name.endsWith('/')) {
+        fs.mkdirSync(outPath, { recursive: true });
+        return;
+      }
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+
+      const lh = entry.localHeaderOffset;
+      if (buf.readUInt32LE(lh) !== 0x04034b50) throw new Error(`Corrupt local file header for ${entry.name}`);
+      const lhNameLen = buf.readUInt16LE(lh + 26);
+      const lhExtraLen = buf.readUInt16LE(lh + 28);
+      const dataStart = lh + 30 + lhNameLen + lhExtraLen;
+      const compData = buf.subarray(dataStart, dataStart + entry.compressedSize);
+
+      let outData;
+      if (entry.method === 0) outData = compData;
+      else if (entry.method === 8) outData = zlib.inflateRawSync(compData);
+      else throw new Error(`Unsupported zip compression method (${entry.method}) for ${entry.name}`);
+
+      fs.writeFileSync(outPath, outData);
+      if (onProgress) onProgress(Math.round(((idx + 1) / entries.length) * 100));
     });
   }
 

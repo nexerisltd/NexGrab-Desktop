@@ -121,12 +121,15 @@
   function showDepsOverlay() {
     depsOverlayShown = true;
     $('#deps-overlay').hidden = false;
+    bumpStuckWatchdog();
   }
   function hideDepsOverlay() {
     depsOverlayShown = false;
     $('#deps-overlay').hidden = true;
     $('#deps-overlay-error').hidden = true;
     $('#deps-overlay-retry').style.display = 'none';
+    $('#deps-overlay-stuck-hint').hidden = true;
+    clearTimeout(stuckTimer);
   }
 
   window.nex.onDepsProgress((data) => {
@@ -136,6 +139,7 @@
     const label = data.component === 'yt-dlp' ? 'yt-dlp' : 'ffmpeg';
     const text = $('#deps-overlay-text');
     const fill = $('#deps-overlay-fill');
+    bumpStuckWatchdog();
 
     if (data.phase === 'downloading') {
       const pct = data.percent || 0;
@@ -144,14 +148,35 @@
     } else if (data.phase === 'verifying') {
       text.textContent = `Verifying ${label}…`;
     } else if (data.phase === 'extracting') {
-      text.textContent = `Extracting ${label}…`;
-      fill.style.width = '100%';
+      // Real per-file percentage now (not an instant jump to 100%) — a zip
+      // with hundreds of small files can still take a little while if
+      // antivirus scans each one as it's written, so this keeps the bar
+      // honestly reflecting progress instead of looking frozen at 100%.
+      const pct = typeof data.percent === 'number' ? data.percent : 0;
+      text.textContent = `Extracting ${label}… ${pct}%`;
+      fill.style.width = `${pct}%`;
     } else if (data.phase === 'update-found') {
       text.textContent = `Updating ${label}…`;
     } else if (data.phase === 'done') {
       text.textContent = `${label} ready`;
+      fill.style.width = '100%';
     }
   });
+
+  // Safety net: if we haven't heard a progress update in a while, the user
+  // shouldn't be left staring at a spinner with no idea whether it's still
+  // working or has silently hung. Surface a reassurance message, then an
+  // actual way out, rather than requiring a force-quit.
+  let stuckTimer = null;
+  function bumpStuckWatchdog() {
+    clearTimeout(stuckTimer);
+    $('#deps-overlay-stuck-hint').hidden = true;
+    $('#deps-overlay-retry').style.display = 'none';
+    stuckTimer = setTimeout(() => {
+      $('#deps-overlay-stuck-hint').hidden = false;
+      $('#deps-overlay-retry').style.display = 'inline-flex';
+    }, 45000);
+  }
 
   window.nex.onDepsReady((data) => {
     if (data.ok) {
