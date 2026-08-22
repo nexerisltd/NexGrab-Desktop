@@ -22,16 +22,9 @@
     "asar": true,
     "compression": "maximum",
     "icon": "assets/icon.png",
-    "publish": {
-      "provider": "github",
-      "owner": "nexerisltd",
-      "repo": "NexGrab-Desktop",
-      "releaseType": "release"
-    },
     "files": [
       "main.js",
       "preload.js",
-      "binaryManager.js",
       "src/**/*",
       "assets/icon.*"
     ],
@@ -50,18 +43,17 @@
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
       "installerSidebar": "assets/installer-sidebar.bmp",
-      "uninstallerSidebar": "assets/installer-sidebar.bmp"
+      "uninstallerSidebar": "assets/installer-sidebar.bmp",
+      "include": "build/installer.nsh"
     },
     "mac": {
       "target": "dmg",
       "icon": "assets/icon.icns",
-      "category": "public.app-category.utilities",
-      "artifactName": "NexGrab-Setup-${version}-mac.${ext}"
+      "category": "public.app-category.utilities"
     },
     "linux": {
       "target": "AppImage",
-      "icon": "assets/icon.png",
-      "artifactName": "NexGrab-Setup-${version}-linux.${ext}"
+      "icon": "assets/icon.png"
     }
   }
 }

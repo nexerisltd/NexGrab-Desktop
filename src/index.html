@@ -11,17 +11,17 @@
 </head>
 <body>
 
-  <!-- DEPENDENCIES SETUP OVERLAY (first launch only — shown while yt-dlp /
+  <!-- DEPENDENCIES SETUP OVERLAY (first launch only &mdash; shown while yt-dlp /
        ffmpeg are being downloaded; stays hidden entirely if both are
        already installed and up to date) -->
-  <div id="deps-overlay" hidden style="position:fixed;inset:0;z-index:9999;background:rgba(10,11,14,.92);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;">
+  <div id="deps-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(10,11,14,.92);align-items:center;justify-content:center;flex-direction:column;gap:14px;">
     <div style="width:34px;height:34px;border:3px solid rgba(255,255,255,.15);border-top-color:#7C5CFC;border-radius:50%;animation:deps-spin 0.8s linear infinite;"></div>
     <p id="deps-overlay-text" style="color:#e8e8ee;font:500 14px Inter,sans-serif;margin:0;">Setting up dependencies…</p>
     <div style="width:240px;height:6px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden;">
       <div id="deps-overlay-fill" style="height:100%;width:0%;background:#7C5CFC;transition:width .25s;"></div>
     </div>
     <p id="deps-overlay-error" style="color:#f87171;font:500 13px Inter,sans-serif;max-width:320px;text-align:center;margin:0;" hidden></p>
-    <p id="deps-overlay-stuck-hint" style="color:#a1a1aa;font:400 12px Inter,sans-serif;max-width:300px;text-align:center;margin:0;" hidden>Taking longer than usual — this can happen if antivirus software is scanning the download. You can keep waiting, or cancel and try again.</p>
+    <p id="deps-overlay-stuck-hint" style="color:#a1a1aa;font:400 12px Inter,sans-serif;max-width:300px;text-align:center;margin:0;" hidden>Taking longer than usual &mdash; this can happen if antivirus software is scanning the download. You can keep waiting, or cancel and try again.</p>
     <button id="deps-overlay-retry" class="ghost-btn" style="display:none">Retry</button>
     <style>@keyframes deps-spin{to{transform:rotate(360deg)}}</style>
   </div>
@@ -52,7 +52,7 @@
     <!-- HERO / URL INPUT -->
     <section class="hero">
       <h1 class="hero-title">Grab anything from <span class="grad">YouTube</span>.<br/>Keep it in the best quality.</h1>
-      <p class="hero-sub">Paste a video or playlist link. NexGrab handles the rest — quality, format, subtitles, metadata.</p>
+      <p class="hero-sub">Paste a video or playlist link. NexGrab handles the rest &mdash; quality, format, subtitles, metadata.</p>
 
       <div class="url-bar">
         <span class="url-bar-icon">
@@ -84,7 +84,7 @@
       </div>
       <div class="queue-list" id="queue-list">
         <div class="queue-empty" id="queue-empty">
-          Nothing queued yet — fetch a link above to get started.
+          Nothing queued yet &mdash; fetch a link above to get started.
         </div>
       </div>
     </section>

@@ -71,6 +71,16 @@ async function initBinaries() {
     writeJSON(SETTINGS_FILE, settings);
     depsReady = ready;
     mainWindow?.webContents.send('deps:ready', { ok: ready });
+
+    // Background update check — first one shortly after a SUCCESSFUL
+    // initial setup (not a fixed 8s from app launch — a big first-time
+    // ffmpeg download can easily take longer than that, which used to let
+    // this race against the still-running initial install: both would try
+    // to download/extract into the same files at once, and afterwards this
+    // check's own progress events had no matching "ready" signal to close
+    // the setup overlay they'd re-opened). Then once every 24h.
+    setTimeout(() => backgroundUpdateCheck(), 8000);
+    setInterval(() => backgroundUpdateCheck(), 24 * 60 * 60 * 1000);
   } catch (e) {
     depsReady = false;
     console.error('initBinaries failed:', e);
@@ -78,12 +88,10 @@ async function initBinaries() {
       ok: false,
       error: `Couldn't download required components. Check your internet connection and retry. (${e.message})`
     });
+    // Deliberately NOT scheduling backgroundUpdateCheck here — if initial
+    // setup failed, retrying is the user's call (Retry button / Settings),
+    // not something that should silently kick off on its own 8s later.
   }
-
-  // Background update check — runs once shortly after startup, then daily.
-  // Silent: only surfaces to the UI if something actually changes.
-  setTimeout(() => backgroundUpdateCheck(), 8000);
-  setInterval(() => backgroundUpdateCheck(), 24 * 60 * 60 * 1000);
 }
 
 async function backgroundUpdateCheck() {

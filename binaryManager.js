@@ -68,6 +68,20 @@ class BinaryManager extends EventEmitter {
     this.ffmpegPath = path.join(this.binDir, this.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
 
     this.ready = false;
+
+    // Serializes ensureBinaries() / checkForUpdates() / redownloadAll() —
+    // all three touch the exact same files on disk, and a background
+    // update check firing while the initial install is still running (or a
+    // manual "Check for updates" click during either) used to be able to
+    // race against it: two downloads/extracts writing the same paths at
+    // once. Every call now waits its turn instead of running concurrently.
+    this._opLock = Promise.resolve();
+  }
+
+  _withLock(fn) {
+    const run = this._opLock.then(fn, fn);
+    this._opLock = run.then(() => {}, () => {});
+    return run;
   }
 
   // -------------------------------------------------------------------
@@ -96,6 +110,10 @@ class BinaryManager extends EventEmitter {
   // so first-launch setup stays as fast as possible.
   // -------------------------------------------------------------------
   async ensureBinaries() {
+    return this._withLock(() => this._ensureBinariesInner());
+  }
+
+  async _ensureBinariesInner() {
     fs.mkdirSync(this.binDir, { recursive: true });
 
     if (!fs.existsSync(this.ytdlpPath)) {
@@ -148,6 +166,10 @@ class BinaryManager extends EventEmitter {
   // user-initiated "Check for updates" click.
   // -------------------------------------------------------------------
   async checkForUpdates({ silent = true } = {}) {
+    return this._withLock(() => this._checkForUpdatesInner({ silent }));
+  }
+
+  async _checkForUpdatesInner({ silent = true } = {}) {
     const result = { ytdlp: { updated: false }, ffmpeg: { updated: false }, error: null };
 
     try {
@@ -182,6 +204,10 @@ class BinaryManager extends EventEmitter {
 
   // Troubleshooting: wipe and redownload both, unconditionally.
   async redownloadAll() {
+    return this._withLock(() => this._redownloadAllInner());
+  }
+
+  async _redownloadAllInner() {
     try { if (fs.existsSync(this.ytdlpPath)) fs.unlinkSync(this.ytdlpPath); } catch { /* ignore */ }
     try { if (fs.existsSync(this.ffmpegPath)) fs.unlinkSync(this.ffmpegPath); } catch { /* ignore */ }
     await this.downloadYtDlp();

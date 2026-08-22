@@ -117,15 +117,16 @@
   // + Settings → Dependencies panel
   // ---------------------------------------------------------------------
   let depsOverlayShown = false;
+  let initialSetupDone = false;
 
   function showDepsOverlay() {
     depsOverlayShown = true;
-    $('#deps-overlay').hidden = false;
+    $('#deps-overlay').style.display = 'flex';
     bumpStuckWatchdog();
   }
   function hideDepsOverlay() {
     depsOverlayShown = false;
-    $('#deps-overlay').hidden = true;
+    $('#deps-overlay').style.display = 'none';
     $('#deps-overlay-error').hidden = true;
     $('#deps-overlay-retry').style.display = 'none';
     $('#deps-overlay-stuck-hint').hidden = true;
@@ -133,6 +134,14 @@
   }
 
   window.nex.onDepsProgress((data) => {
+    // Once initial setup has completed, later progress events only come
+    // from a background update check (daily, or after a manual "Check for
+    // updates" click) — those already have their own toast via
+    // onDepsAutoUpdated below, so they shouldn't pop the blocking
+    // first-launch overlay back up with no matching "ready" signal to
+    // close it again.
+    if (initialSetupDone) return;
+
     // Any progress event at all means a real download/extract is happening
     // (already-installed binaries never emit these) — show the overlay.
     if (!depsOverlayShown) showDepsOverlay();
@@ -180,12 +189,16 @@
 
   window.nex.onDepsReady((data) => {
     if (data.ok) {
+      initialSetupDone = true;
       hideDepsOverlay();
       checkYtDlp();
       refreshDepsStatus();
     } else {
       // Keep the overlay up with a clear error + retry button rather than
-      // letting the app proceed with no working yt-dlp/ffmpeg.
+      // letting the app proceed with no working yt-dlp/ffmpeg. Initial
+      // setup has NOT succeeded yet, so progress events (e.g. from the
+      // user clicking Retry) should still be able to drive this overlay.
+      initialSetupDone = false;
       showDepsOverlay();
       $('#deps-overlay-text').textContent = 'Setup failed';
       $('#deps-overlay-error').hidden = false;
@@ -205,7 +218,7 @@
     $('#deps-overlay-text').textContent = 'Setting up dependencies…';
     $('#deps-overlay-fill').style.width = '0%';
     const res = await window.nex.redownloadDeps();
-    if (res.ok) { hideDepsOverlay(); checkYtDlp(); refreshDepsStatus(); }
+    if (res.ok) { initialSetupDone = true; hideDepsOverlay(); checkYtDlp(); refreshDepsStatus(); }
     else {
       $('#deps-overlay-text').textContent = 'Setup failed';
       $('#deps-overlay-error').hidden = false;
