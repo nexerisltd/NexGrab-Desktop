@@ -313,7 +313,12 @@ function runYtDlpJSON(args) {
 // alternate player clients until one works.
 // ---------------------------------------------------------------------------
 const CLIENT_CHAIN = ['tv', 'mweb', 'ios', 'web_creator'];
-const SABR_ERROR_RE = /forcing sabr streaming|sabr[- ]only|missing url in format|requested format is not available|unable to extract yt initial data/i;
+// Broadened beyond pure SABR-shaped failures: "the page needs to be
+// reloaded" and "unable to extract yt initial data" are the same class of
+// YouTube-side bot-check block, just surfacing on the plain flat-playlist
+// probe (step 1) instead of full extraction (step 2) — so they need the
+// same client-chain retry, not just the SABR-specific wording.
+const SABR_ERROR_RE = /forcing sabr streaming|sabr[- ]only|missing url in format|requested format is not available|unable to extract yt initial data|the page needs to be reloaded|unable to extract yt player response/i;
 
 function buildExtractorArgs(client) {
   const args = ['--extractor-args', `youtube:player_client=${client}`];
@@ -355,8 +360,12 @@ ipcMain.handle('ytdlp:check', async () => {
 
 ipcMain.handle('ytdlp:fetch-info', async (_evt, url) => {
   try {
-    // Step 1: cheap flat probe to see if this is a playlist
-    const flatOut = await runYtDlpJSON(['-J', '--flat-playlist', '--no-warnings', url]);
+    // Step 1: cheap flat probe to see if this is a playlist. Routed through
+    // the same client-fallback chain as step 2 — YouTube's bot-check block
+    // ("the page needs to be reloaded", etc.) can just as easily hit this
+    // request as the full extraction below, and used to fail the whole
+    // fetch immediately here with no retry at all.
+    const flatOut = await runYtDlpJSONWithFallback(['-J', '--flat-playlist', '--no-warnings', url]);
     const flat = JSON.parse(flatOut);
 
     if (flat._type === 'playlist') {
@@ -375,9 +384,8 @@ ipcMain.handle('ytdlp:fetch-info', async (_evt, url) => {
       };
     }
 
-    // Step 2: full extraction for a single video (real formats list) — this
-    // is the step most likely to hit a SABR-only response, so it goes
-    // through the client fallback chain.
+    // Step 2: full extraction for a single video (real formats list) —
+    // also goes through the client fallback chain.
     const fullOut = await runYtDlpJSONWithFallback(['-J', '--no-playlist', '--no-warnings', url]);
     const info = JSON.parse(fullOut);
 
