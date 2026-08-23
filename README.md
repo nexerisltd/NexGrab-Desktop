@@ -12,14 +12,14 @@ Grab the latest build for your platform from the [Releases page](https://github.
 
 ### Windows
 <!-- DOWNLOAD_WIN_START -->
-[![Download NexGrab for Windows](https://img.shields.io/badge/Download-NexGrab%20for%20Windows-0ea5e9?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/nexerisltd/NexGrab-Desktop/releases/download/v2.1.0/NexGrab-Setup-2.1.0-win64.exe)
+[![Download NexGrab for Windows](https://img.shields.io/badge/Download-NexGrab%20for%20Windows-0ea5e9?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/nexerisltd/NexGrab-Desktop/releases/download/untagged-f1b5e2438aac4d2f4569/NexGrab-Setup-0.1.0-test-win64.exe)
 
-Download and run **NexGrab Setup 2.1.0 for Windows (64-bit)**.
+Download and run **NexGrab Setup 0.1.0-test-test for Windows (64-bit)**.
 <!-- DOWNLOAD_WIN_END -->
 
 ### macOS
 <!-- DOWNLOAD_MAC_START -->
-[![Download NexGrab for macOS](https://img.shields.io/badge/Download-NexGrab%20for%20macOS-0ea5e9?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/nexerisltd/NexGrab-Desktop/releases/download/v2.1.0/NexGrab-2.1.0-arm64.dmg)
+[![Download NexGrab for macOS](https://img.shields.io/badge/Download-NexGrab%20for%20macOS-0ea5e9?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/nexerisltd/NexGrab-Desktop/releases/download/untagged-f1b5e2438aac4d2f4569/NexGrab-0.1.0-test-arm64.dmg)
 <!-- DOWNLOAD_MAC_END -->
 
 ### Linux
