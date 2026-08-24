@@ -312,13 +312,18 @@ function runYtDlpJSON(args) {
 // surfacing that to the user, we retry the same request against a chain of
 // alternate player clients until one works.
 // ---------------------------------------------------------------------------
-const CLIENT_CHAIN = ['tv', 'mweb', 'ios', 'web_creator'];
+// Ordered by how often each one actually works / how fast it responds,
+// based on current (Aug 2026) real-world behavior. "android_vr" is
+// deliberately excluded — YouTube broke it for everyone on stable yt-dlp
+// starting Aug 17 2026 (HTTP 403), fixed only in nightly builds; we track
+// stable releases (see binaryManager.js), so it would just be dead weight.
+const CLIENT_CHAIN = ['tv', 'mweb', 'ios', 'android', 'web_creator', 'tv_downgraded', 'web_safari', 'web_embedded', 'web'];
 // Broadened beyond pure SABR-shaped failures: "the page needs to be
-// reloaded" and "unable to extract yt initial data" are the same class of
-// YouTube-side bot-check block, just surfacing on the plain flat-playlist
-// probe (step 1) instead of full extraction (step 2) — so they need the
-// same client-chain retry, not just the SABR-specific wording.
-const SABR_ERROR_RE = /forcing sabr streaming|sabr[- ]only|missing url in format|requested format is not available|unable to extract yt initial data|the page needs to be reloaded|unable to extract yt player response/i;
+// reloaded", "unable to extract yt initial data", and YouTube's "please
+// sign in" / "confirm you're not a bot" wall are all the same class of
+// per-client bot-check block — some player_client values pass it and
+// others don't, so all of them get the same client-chain retry.
+const SABR_ERROR_RE = /forcing sabr streaming|sabr[- ]only|missing url in format|requested format is not available|unable to extract yt initial data|the page needs to be reloaded|unable to extract yt player response|sign in to confirm|please sign in/i;
 
 function buildExtractorArgs(client) {
   const args = ['--extractor-args', `youtube:player_client=${client}`];
@@ -332,18 +337,39 @@ function buildExtractorArgs(client) {
   return args;
 }
 
+// player_client=tv paired with real account cookies is documented to
+// invalidate the session those cookies came from (effectively logging the
+// user out of the browser/account they signed in with). yt-dlp's own
+// upstream default for logged-in users swaps in "tv_downgraded" instead of
+// plain "tv" for exactly this reason — mirror that here rather than
+// dropping the tv-family client from the chain entirely.
+function getClientChain() {
+  const hasCookies = !!(settings.cookiesFilePath || settings.cookiesFromBrowser);
+  if (!hasCookies) return CLIENT_CHAIN;
+  return [...new Set(CLIENT_CHAIN.map((c) => (c === 'tv' ? 'tv_downgraded' : c)))];
+}
+
+function emitFetchProgress(message) {
+  mainWindow?.webContents.send('ytdlp:fetch-progress', { message });
+}
+
 async function runYtDlpJSONWithFallback(baseArgs) {
+  const chain = getClientChain();
   let lastErr;
-  for (let i = 0; i < CLIENT_CHAIN.length; i++) {
-    const client = CLIENT_CHAIN[i];
+  for (let i = 0; i < chain.length; i++) {
+    const client = chain[i];
+    emitFetchProgress(`Using ${client}...`);
     try {
-      return await runYtDlpJSON([...buildExtractorArgs(client), ...baseArgs]);
+      const result = await runYtDlpJSON([...buildExtractorArgs(client), ...baseArgs]);
+      emitFetchProgress('Data fetching successful.');
+      return result;
     } catch (e) {
       lastErr = e;
-      const isLastClient = i === CLIENT_CHAIN.length - 1;
+      const isLastClient = i === chain.length - 1;
       // Only burn through the whole chain for SABR-shaped failures — a bad
-      // URL or a private video should fail fast instead of retrying 4x.
+      // URL or a private video should fail fast instead of retrying 9x.
       if (!SABR_ERROR_RE.test(e.message) || isLastClient) throw e;
+      emitFetchProgress(`Access declined by ${client}. Moving to next client...`);
     }
   }
   throw lastErr;
@@ -754,10 +780,12 @@ const FINAL_PATH_RE = /^NEXGRAB_FINAL_PATH::(.+)$/;
 
 ipcMain.handle('download:start', async (_evt, job) => {
   const send = (channel, payload) => mainWindow?.webContents.send(channel, { jobId: job.jobId, ...payload });
+  const chain = getClientChain();
   let clientIdx = 0;
 
   function attempt() {
-    const client = CLIENT_CHAIN[clientIdx];
+    const client = chain[clientIdx];
+    send('download:progress', { status: 'retrying', message: `Using ${client}...` });
     const args = [...buildExtractorArgs(client), ...buildArgs(job)];
     const proc = spawn(settings.ytdlpPath, args, { cwd: job.outputDir });
     activeJobs.set(job.jobId, { proc, destination: null });
@@ -846,12 +874,12 @@ ipcMain.handle('download:start', async (_evt, job) => {
 
       // SABR-shaped failure and clients left to try — silently retry with
       // the next one instead of surfacing an error to the user.
-      if (sabrSeen && clientIdx < CLIENT_CHAIN.length - 1) {
-        clientIdx++;
+      if (sabrSeen && clientIdx < chain.length - 1) {
         send('download:progress', {
           status: 'retrying',
-          message: `Blocked — retrying with the ${CLIENT_CHAIN[clientIdx]} client…`
+          message: `Access declined by ${client}. Moving to next client...`
         });
+        clientIdx++;
         attempt();
         return;
       }

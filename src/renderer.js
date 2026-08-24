@@ -457,13 +457,19 @@
   $('#url-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') fetchInfo(); });
   $('#fetch-btn').addEventListener('click', fetchInfo);
 
+  window.nex.onFetchProgress((data) => {
+    $('#ytdlp-status').textContent = data.message;
+  });
+
   async function fetchInfo() {
     const url = $('#url-input').value.trim();
     if (!url) { toast('Paste a YouTube link first'); return; }
 
+    const statusBeforeFetch = $('#ytdlp-status').textContent;
     setFetching(true);
     const res = await window.nex.fetchInfo(url);
     setFetching(false);
+    $('#ytdlp-status').textContent = statusBeforeFetch;
 
     if (!res.ok) {
       toast(`Could not fetch info: ${res.error.slice(0, 160)}`, 'error');

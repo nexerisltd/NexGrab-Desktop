@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('nex', {
   redownloadDeps: () => ipcRenderer.invoke('deps:redownload'),
   onDepsProgress: (cb) => ipcRenderer.on('deps:progress', (_e, data) => cb(data)),
   onDepsReady: (cb) => ipcRenderer.on('deps:ready', (_e, data) => cb(data)),
+  onFetchProgress: (cb) => ipcRenderer.on('ytdlp:fetch-progress', (_e, data) => cb(data)),
   onDepsAutoUpdated: (cb) => ipcRenderer.on('deps:auto-updated', (_e, data) => cb(data)),
 
   // --- Optional local PO Token provider sidecar ---
